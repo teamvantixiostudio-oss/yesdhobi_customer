@@ -4,6 +4,7 @@ import '../theme/app_theme.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/custom_text_field.dart';
 import '../widgets/social_auth_button.dart';
+import '../services/customer_api_service.dart';
 import 'otp_verification_screen.dart';
 import 'register_screen.dart';
 
@@ -24,19 +25,18 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _handleSendOtp() {
+  Future<void> _handleSendOtp() async {
     String phone = _mobileController.text.trim();
     if (phone.isEmpty) {
-      phone = '+91 98765 43210';
-    } else if (!phone.startsWith('+')) {
-      phone = '+91 $phone';
+      phone = '9876543000';
     }
 
     setState(() {
       _isLoading = true;
     });
 
-    Future.delayed(const Duration(milliseconds: 600), () {
+    try {
+      await CustomerApiService.instance.requestOtp(phone);
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -47,7 +47,19 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         );
       }
-    });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceAll('Exception: ', '')),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
   }
 
   @override

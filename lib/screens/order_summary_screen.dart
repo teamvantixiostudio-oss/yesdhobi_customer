@@ -3,6 +3,8 @@ import 'package:google_fonts/google_fonts.dart';
 import '../state/cart_manager.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_button.dart';
+import '../services/api_client.dart';
+import '../services/customer_api_service.dart';
 import 'order_success_screen.dart';
 
 class OrderSummaryScreen extends StatefulWidget {
@@ -33,19 +35,72 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
     if (mounted) setState(() {});
   }
 
-  void _onPlaceOrder() {
+  Future<void> _onPlaceOrder() async {
     setState(() => _isPlacingOrder = true);
 
-    Future.delayed(const Duration(milliseconds: 700), () {
+    try {
+      // 1. Ensure authenticated
+      if (!ApiClient.instance.isAuthenticated) {
+        await CustomerApiService.instance.requestOtp('9876543000');
+        await CustomerApiService.instance.verifyOtp('9876543000', '1234');
+      }
+
+      // 2. Resolve address (auto-create if new user has none)
+      var addresses = await CustomerApiService.instance.getAddresses();
+      if (addresses.isEmpty) {
+        final newAddr = await CustomerApiService.instance.createAddress();
+        if (newAddr.containsKey('id')) {
+          addresses = [newAddr];
+        }
+      }
+      final addressId = addresses.isNotEmpty ? addresses[0]['id'].toString() : '';
+
+      // 3. Prepare items payload
+      final itemsPayload = _cartManager.selectedItems.map((item) => {
+        'code': item.id,
+        'quantity': item.quantity,
+      }).toList();
+
+      final now = DateTime.now();
+      final pickupDate = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+
+      // 4. Call live AWS backend
+      final orderRes = await CustomerApiService.instance.placeOrder(
+        items: itemsPayload.isNotEmpty ? itemsPayload : [{'code': 'wi_1', 'quantity': 1}],
+        addressId: addressId,
+        pickupDate: pickupDate,
+        pickupSlot: _cartManager.selectedSlot.isNotEmpty ? _cartManager.selectedSlot : '6-8 PM',
+        paymentMethod: _selectedPaymentMethod == 0 ? 'UPI' : 'COD',
+        promoCode: _cartManager.couponApplied ? _cartManager.couponCode : null,
+      );
+
+      final displayId = orderRes['displayId']?.toString() ?? '#YD-100001';
+      final eta = orderRes['deliveryEta']?.toString() ?? 'Tomorrow\nBy 6:00 PM';
+
+      _cartManager.clearCart();
+
       if (mounted) {
         setState(() => _isPlacingOrder = false);
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
-            builder: (context) => const OrderSuccessScreen(),
+            builder: (context) => OrderSuccessScreen(
+              orderId: displayId,
+              estimatedDelivery: eta,
+            ),
           ),
         );
       }
-    });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isPlacingOrder = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Order failed: ${e.toString().replaceAll('Exception: ', '')}'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
   }
 
   @override

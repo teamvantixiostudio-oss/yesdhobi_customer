@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/otp_field.dart';
+import '../services/customer_api_service.dart';
 import 'home_screen.dart';
 
 class OtpVerificationScreen extends StatefulWidget {
@@ -11,7 +12,7 @@ class OtpVerificationScreen extends StatefulWidget {
 
   const OtpVerificationScreen({
     super.key,
-    this.phoneNumber = '+91 98765 43210',
+    this.phoneNumber = '9876543000',
   });
 
   @override
@@ -19,7 +20,7 @@ class OtpVerificationScreen extends StatefulWidget {
 }
 
 class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
-  String _otpCode = '482';
+  String _otpCode = '1234';
   bool _isLoading = false;
   int _countdown = 30;
   Timer? _timer;
@@ -55,13 +56,14 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     return '00:$seconds';
   }
 
-  void _handleVerify() {
+  Future<void> _handleVerify() async {
     if (_otpCode.isEmpty) return;
     setState(() {
       _isLoading = true;
     });
 
-    Future.delayed(const Duration(milliseconds: 600), () {
+    try {
+      await CustomerApiService.instance.verifyOtp(widget.phoneNumber, _otpCode);
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -71,7 +73,44 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
           (route) => false,
         );
       }
-    });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceAll('Exception: ', '')),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleResend() async {
+    if (_countdown > 0) return;
+    try {
+      await CustomerApiService.instance.requestOtp(widget.phoneNumber);
+      _startCountdown();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('OTP sent successfully (Test OTP: 1234)'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceAll('Exception: ', '')),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -148,7 +187,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
               // 4 OTP Boxes matching screenshot (pre-filled with 4, 8, 2)
               OtpInputField(
                 length: 4,
-                initialValue: '482',
+                initialValue: '1234',
                 onChanged: (val) {
                   setState(() {
                     _otpCode = val;
@@ -168,12 +207,15 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    'Didn’t receive code?',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w400,
-                      color: AppColors.textSecondary,
+                  InkWell(
+                    onTap: _countdown == 0 ? _handleResend : null,
+                    child: Text(
+                      _countdown == 0 ? 'Resend OTP' : 'Didn’t receive code?',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 14,
+                        fontWeight: _countdown == 0 ? FontWeight.w700 : FontWeight.w400,
+                        color: _countdown == 0 ? AppColors.primary : AppColors.textSecondary,
+                      ),
                     ),
                   ),
                   Row(
@@ -211,17 +253,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
               // Resend OTP via SMS
               Center(
                 child: GestureDetector(
-                  onTap: _countdown == 0
-                      ? () {
-                          _startCountdown();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('New OTP sent successfully!'),
-                              backgroundColor: AppColors.primary,
-                            ),
-                          );
-                        }
-                      : null,
+                  onTap: _countdown == 0 ? _handleResend : null,
                   child: Text(
                     'Resend OTP via SMS',
                     style: GoogleFonts.plusJakartaSans(
