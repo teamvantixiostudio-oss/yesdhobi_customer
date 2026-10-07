@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/customer_api_service.dart';
+import '../state/cart_manager.dart';
 import '../theme/app_theme.dart';
-
 import 'track_order_screen.dart';
 
-class OrderDetailsScreen extends StatelessWidget {
+class OrderDetailsScreen extends StatefulWidget {
   final String orderId;
   final String? rawOrderId;
   final String status;
@@ -20,43 +20,155 @@ class OrderDetailsScreen extends StatelessWidget {
 
   const OrderDetailsScreen({
     super.key,
-    this.orderId = '#YD-881590',
+    this.orderId = '#YD-100001',
     this.rawOrderId,
-    this.status = 'DELIVERED',
-    this.dateSubtitle = 'Completed on 18 Oct 2026, 4:15 PM',
-    this.items = const [
-      {
-        'name': 'Shirt',
-        'service': 'Wash & Iron',
-        'quantity': 2,
-        'price': 80,
-      },
-      {
-        'name': 'T-Shirt',
-        'service': 'Wash & Iron',
-        'quantity': 1,
-        'price': 30,
-      },
-      {
-        'name': 'Bedsheet',
-        'service': 'Wash & Fold',
-        'quantity': 1,
-        'price': 120,
-      },
-    ],
-    this.subtotal = 230,
-    this.discount = 46,
-    this.grandTotal = 184,
-    this.deliveryAddress =
-        'Apartment 402, Block B, Silver Oak Residency,\nHSR Layout, Sector 3, Bangalore - 560102',
-    this.riderName = 'Rahul',
+    this.status = 'PENDING_PICKUP',
+    this.dateSubtitle = '',
+    this.items = const [],
+    this.subtotal = 0,
+    this.discount = 0,
+    this.grandTotal = 0,
+    this.deliveryAddress = 'Doorstep Delivery',
+    this.riderName = 'Assigned Partner',
     this.rating = 5.0,
   });
 
   @override
+  State<OrderDetailsScreen> createState() => _OrderDetailsScreenState();
+}
+
+class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
+  late String _status;
+  late String _dateSubtitle;
+  late String _deliveryAddress;
+  late String _riderName;
+  late double _rating;
+  late List<Map<String, dynamic>> _items;
+  late int _subtotal;
+  late int _discount;
+  late int _grandTotal;
+
+  @override
+  void initState() {
+    super.initState();
+    _status = widget.status;
+    _deliveryAddress = widget.deliveryAddress;
+    _riderName = widget.riderName;
+    _rating = widget.rating;
+    _discount = widget.discount;
+
+    // 1. Sanitize items and ensure individual prices are NEVER zero
+    _items = _sanitizeItems(widget.items);
+
+    // 2. Sanitize subtotal and grand total so bill is NEVER zero
+    final computedSubtotal = _items.fold<int>(
+      0,
+      (sum, i) => sum + ((i['price'] as num?)?.toInt() ?? 0),
+    );
+    _subtotal = widget.subtotal > 0 ? widget.subtotal : computedSubtotal;
+    _grandTotal = widget.grandTotal > 0
+        ? widget.grandTotal
+        : (_subtotal > 0 ? (_subtotal - _discount) : computedSubtotal);
+
+    // 3. Sanitize date subtitle dynamically
+    if (widget.dateSubtitle.isNotEmpty && !widget.dateSubtitle.contains('18 Oct 2026')) {
+      _dateSubtitle = widget.dateSubtitle;
+    } else {
+      final now = DateTime.now();
+      final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      _dateSubtitle = 'Ordered on ${now.day} ${months[now.month - 1]} ${now.year}';
+    }
+
+    // 4. Load live order details if rawOrderId is provided
+    if (widget.rawOrderId != null && widget.rawOrderId!.isNotEmpty) {
+      _fetchLiveOrder();
+    }
+  }
+
+  String get cleanOrderId {
+    final clean = widget.orderId
+        .replaceAll('YD-YD-', 'YD-')
+        .replaceAll('#YD-YD-', '#YD-')
+        .replaceAll('##', '#')
+        .trim();
+    if (clean.startsWith('#')) return clean;
+    return '#$clean';
+  }
+
+  List<Map<String, dynamic>> _sanitizeItems(List<Map<String, dynamic>> source) {
+    if (source.isEmpty) return [];
+    return source.map((it) {
+      final name = it['name']?.toString() ?? it['item']?.toString() ?? 'Laundry Item';
+      final service = it['serviceName']?.toString() ?? it['service']?.toString() ?? 'Care Service';
+      final qty = (it['quantity'] as num?)?.toInt() ?? 1;
+      int price = (it['price'] as num?)?.toInt() ?? (it['lineTotal'] as num?)?.toInt() ?? 0;
+
+      if (price <= 0) {
+        final unitPrice = (it['unitPrice'] as num?)?.toInt();
+        if (unitPrice != null && unitPrice > 0) {
+          price = unitPrice * qty;
+        } else {
+          // Look up price from local catalog
+          final matches = CartManager.instance.catalog.where(
+            (c) => c.name.toLowerCase() == name.toLowerCase(),
+          );
+          if (matches.isNotEmpty) {
+            price = matches.first.price * qty;
+          }
+        }
+      }
+
+      return {
+        'name': name,
+        'service': service,
+        'quantity': qty,
+        'price': price,
+      };
+    }).toList();
+  }
+
+  Future<void> _fetchLiveOrder() async {
+    try {
+      final order = await CustomerApiService.instance.getOrderById(widget.rawOrderId!);
+      if (!mounted) return;
+
+      final pricing = (order['pricing'] is Map) ? (order['pricing'] as Map<String, dynamic>) : null;
+      final subtotalRaw = pricing?['subtotal'] ?? order['subtotal'];
+      final discountRaw = pricing?['discount'] ?? order['discount'];
+      final totalRaw = pricing?['total'] ??
+          order['amount'] ??
+          order['finalAmount'] ??
+          order['totalAmount'] ??
+          order['total'];
+
+      final itemsRaw = (order['items'] is List) ? (order['items'] as List) : [];
+      final freshItems = itemsRaw.isNotEmpty
+          ? _sanitizeItems(itemsRaw.cast<Map<String, dynamic>>())
+          : _items;
+
+      final computed = freshItems.fold<int>(
+        0,
+        (sum, i) => sum + ((i['price'] as num?)?.toInt() ?? 0),
+      );
+      final sub = (subtotalRaw as num?)?.toInt() ?? (computed > 0 ? computed : _subtotal);
+      final disc = (discountRaw as num?)?.toInt() ?? _discount;
+      final grand = (totalRaw as num?)?.toInt() ?? (sub > 0 ? (sub - disc) : _grandTotal);
+
+      setState(() {
+        if (order['status'] != null) _status = order['status'].toString().toUpperCase();
+        if (order['rider']?['name'] != null) _riderName = order['rider']['name'].toString();
+        _items = freshItems;
+        _subtotal = sub;
+        _discount = disc;
+        _grandTotal = grand;
+      });
+    } catch (_) {}
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final isDelivered = status.toUpperCase() == 'DELIVERED';
-    final isCancelled = status.toUpperCase() == 'CANCELLED';
+    final isDelivered = _status.toUpperCase() == 'DELIVERED';
+    final isCancelled = _status.toUpperCase() == 'CANCELLED';
 
     final badgeBg = isDelivered
         ? const Color(0xFFECFDF5)
@@ -116,7 +228,7 @@ class OrderDetailsScreen extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        'ID: $orderId',
+                        'ID: $cleanOrderId',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 16,
                           fontWeight: FontWeight.w800,
@@ -133,7 +245,7 @@ class OrderDetailsScreen extends StatelessWidget {
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          status,
+                          _status,
                           style: GoogleFonts.plusJakartaSans(
                             fontSize: 11,
                             fontWeight: FontWeight.w800,
@@ -146,7 +258,7 @@ class OrderDetailsScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    dateSubtitle,
+                    _dateSubtitle,
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 13,
                       fontWeight: FontWeight.w500,
@@ -173,44 +285,57 @@ class OrderDetailsScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  ...items.map(
-                    (item) => Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          RichText(
-                            text: TextSpan(
-                              text: '${item['name']} (${item['service']}) ',
+                  if (_items.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        'Standard Laundry Wash & Care',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    )
+                  else
+                    ..._items.map(
+                      (item) => Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            RichText(
+                              text: TextSpan(
+                                text: '${item['name']} (${item['service']}) ',
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textPrimary,
+                                ),
+                                children: [
+                                  TextSpan(
+                                    text: 'x${item['quantity']}',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 13.5,
+                                      fontWeight: FontWeight.w500,
+                                      color: const Color(0xFF64748B),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Text(
+                              '₹${item['price']}',
                               style: GoogleFonts.plusJakartaSans(
-                                fontSize: 13.5,
-                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
                                 color: AppColors.textPrimary,
                               ),
-                              children: [
-                                TextSpan(
-                                  text: 'x${item['quantity']}',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w500,
-                                    color: const Color(0xFF64748B),
-                                  ),
-                                ),
-                              ],
                             ),
-                          ),
-                          Text(
-                            '₹${item['price']}',
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.textPrimary,
-                            ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -233,7 +358,7 @@ class OrderDetailsScreen extends StatelessWidget {
                   const SizedBox(height: 14),
                   _buildBillRow(
                     label: 'Subtotal',
-                    value: '₹$subtotal',
+                    value: '₹$_subtotal',
                   ),
                   const SizedBox(height: 10),
                   _buildBillRow(
@@ -244,7 +369,7 @@ class OrderDetailsScreen extends StatelessWidget {
                   const SizedBox(height: 10),
                   _buildBillRow(
                     label: 'Promo Discount',
-                    value: '-₹$discount',
+                    value: '-₹$_discount',
                     valueColor: const Color(0xFF059669),
                   ),
                   const SizedBox(height: 16),
@@ -260,7 +385,7 @@ class OrderDetailsScreen extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        '₹$grandTotal',
+                        '₹$_grandTotal',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 17,
                           fontWeight: FontWeight.w800,
@@ -290,7 +415,7 @@ class OrderDetailsScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    deliveryAddress,
+                    _deliveryAddress,
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 13,
                       fontWeight: FontWeight.w400,
@@ -323,7 +448,7 @@ class OrderDetailsScreen extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        'Delivered by $riderName',
+                        'Delivered by $_riderName',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 14.5,
                           fontWeight: FontWeight.w800,
@@ -339,7 +464,7 @@ class OrderDetailsScreen extends StatelessWidget {
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            rating.toStringAsFixed(1),
+                            _rating.toStringAsFixed(1),
                             style: GoogleFonts.plusJakartaSans(
                               fontSize: 14,
                               fontWeight: FontWeight.w800,
@@ -379,8 +504,8 @@ class OrderDetailsScreen extends StatelessWidget {
                       context,
                       MaterialPageRoute(
                         builder: (_) => TrackOrderScreen(
-                          orderId: orderId,
-                          rawOrderId: rawOrderId,
+                          orderId: cleanOrderId,
+                          rawOrderId: widget.rawOrderId,
                         ),
                       ),
                     );
@@ -404,13 +529,14 @@ class OrderDetailsScreen extends StatelessWidget {
                 child: InkWell(
                   borderRadius: BorderRadius.circular(16),
                   onTap: () async {
-                    final targetId = rawOrderId ?? orderId.replaceAll('#', '').replaceAll('YD-', '');
+                    final targetId = widget.rawOrderId ??
+                        widget.orderId.replaceAll('#', '').replaceAll('YD-', '');
                     Map<String, dynamic>? invoiceData;
                     try {
                       invoiceData = await CustomerApiService.instance.getOrderInvoice(targetId);
                     } catch (_) {}
 
-                    final invNum = invoiceData?['invoiceNumber']?.toString() ?? 'INV-$orderId';
+                    final invNum = invoiceData?['invoiceNumber']?.toString() ?? 'INV-$cleanOrderId';
                     if (context.mounted) {
                       showDialog(
                         context: context,
@@ -445,46 +571,35 @@ class OrderDetailsScreen extends StatelessWidget {
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                'Order Reference: $orderId',
+                                'Order Reference: $cleanOrderId',
                                 style: GoogleFonts.plusJakartaSans(
                                   fontSize: 12.5,
                                   color: const Color(0xFF64748B),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                'Grand Total: ₹$_grandTotal',
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.primary,
                                 ),
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                'Billed To: ${deliveryAddress.isNotEmpty ? deliveryAddress : "Customer"}',
+                                'Status: ${_status == 'DELIVERED' ? 'PAID' : 'PENDING ON DELIVERY'}',
                                 style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 12.5,
-                                  color: const Color(0xFF64748B),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: const Color(0xFF059669),
                                 ),
-                              ),
-                              const Divider(height: 24),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    'Total Paid',
-                                    style: GoogleFonts.plusJakartaSans(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  Text(
-                                    '₹$grandTotal',
-                                    style: GoogleFonts.plusJakartaSans(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w800,
-                                      color: AppColors.primary,
-                                    ),
-                                  ),
-                                ],
                               ),
                             ],
                           ),
                           actions: [
                             TextButton(
-                              onPressed: () => Navigator.of(ctx).pop(),
+                              onPressed: () => Navigator.pop(ctx),
                               child: Text(
                                 'Close',
                                 style: GoogleFonts.plusJakartaSans(

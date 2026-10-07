@@ -32,10 +32,40 @@ class _TrackOrderScreenState extends State<TrackOrderScreen> {
   String _statusCode = 'PENDING_PICKUP';
   Timer? _pollTimer;
 
+  String get cleanOrderId {
+    final clean = widget.orderId
+        .replaceAll('YD-YD-', 'YD-')
+        .replaceAll('#YD-YD-', '#YD-')
+        .trim();
+    if (clean.startsWith('#')) return clean;
+    return '#$clean';
+  }
+
+  String _formatEtaString(String etaRaw) {
+    if (etaRaw.trim().isEmpty) return 'Tomorrow • By 6:00 PM';
+    if (etaRaw.contains('T') || RegExp(r'^\d{4}-\d{2}-\d{2}').hasMatch(etaRaw)) {
+      try {
+        final target = DateTime.parse(etaRaw).toLocal();
+        final now = DateTime.now();
+        final diffDays = target.difference(DateTime(now.year, now.month, now.day)).inDays;
+        final months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        if (diffDays <= 1) {
+          return 'Tomorrow • By 6:00 PM';
+        } else if (diffDays == 2) {
+          return 'In 2 Days • By 6:00 PM';
+        } else {
+          final weekdays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+          return '${weekdays[target.weekday - 1]}, ${target.day} ${months[target.month - 1]} • By 6:00 PM';
+        }
+      } catch (_) {}
+    }
+    return etaRaw.replaceAll('\n', ' • ');
+  }
+
   @override
   void initState() {
     super.initState();
-    _eta = widget.estimatedDelivery;
+    _eta = _formatEtaString(widget.estimatedDelivery);
     _fetchTracking();
     _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
       if (mounted) {
@@ -61,7 +91,7 @@ class _TrackOrderScreenState extends State<TrackOrderScreen> {
             _statusCode = res['status'].toString().toUpperCase();
           }
           if (res['deliveryEta'] != null && res['deliveryEta'].toString().isNotEmpty) {
-            _eta = res['deliveryEta'].toString();
+            _eta = _formatEtaString(res['deliveryEta'].toString());
           }
           if (res['statusLabel'] != null) {
             _statusLabel = res['statusLabel'].toString();
@@ -132,7 +162,7 @@ class _TrackOrderScreenState extends State<TrackOrderScreen> {
               ),
             ),
             Text(
-              widget.orderId,
+              cleanOrderId,
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,

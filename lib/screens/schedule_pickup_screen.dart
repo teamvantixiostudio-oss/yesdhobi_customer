@@ -156,10 +156,15 @@ class _SchedulePickupScreenState extends State<SchedulePickupScreen> {
       );
 
       final rawId = orderRes['id']?.toString() ?? '';
-      final displayId = orderRes['orderNumber'] != null
-          ? '#YD-${orderRes['orderNumber']}'
-          : (orderRes['displayId']?.toString() ?? '#YD-100001');
-      final eta = orderRes['deliveryEta']?.toString() ?? 'Standard delivery within 24-48 hours';
+      final rawNumber = orderRes['orderNumber']?.toString() ?? orderRes['displayId']?.toString() ?? '100001';
+      final cleanNumber = rawNumber
+          .replaceAll('#', '')
+          .replaceAll('YD-', '')
+          .replaceAll('YD', '')
+          .replaceAll('-', '')
+          .trim();
+      final displayId = cleanNumber.isNotEmpty ? '#YD-$cleanNumber' : '#YD-$rawId';
+      final eta = orderRes['deliveryEta']?.toString() ?? '';
 
       _cartManager.clearCart();
 

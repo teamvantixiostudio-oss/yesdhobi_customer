@@ -842,7 +842,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildActiveOrderBanner() {
     final rawNumber = _topActiveOrder!['orderNumber']?.toString() ?? '100001';
-    final cleanNumber = rawNumber.replaceAll('#', '').replaceAll('YD-', '');
+    final cleanNumber = rawNumber
+        .replaceAll('#', '')
+        .replaceAll('YD-', '')
+        .replaceAll('YD', '')
+        .replaceAll('-', '')
+        .trim();
     final statusText = _topActiveOrder!['statusLabel']?.toString() ?? 'Processing at facility';
 
     return GestureDetector(
@@ -1077,8 +1082,15 @@ class _HomeScreenState extends State<HomeScreen> {
             else
               ..._realOrders.map((order) {
                 final rawId = order['id']?.toString() ?? '';
-                final orderNum = order['orderNumber'] != null
-                    ? '#YD-${order['orderNumber']}'
+                final rawNumber = order['orderNumber']?.toString() ?? rawId;
+                final cleanNumber = rawNumber
+                    .replaceAll('#', '')
+                    .replaceAll('YD-', '')
+                    .replaceAll('YD', '')
+                    .replaceAll('-', '')
+                    .trim();
+                final orderNum = cleanNumber.isNotEmpty
+                    ? '#YD-$cleanNumber'
                     : (rawId.length > 8 ? '#YD-${rawId.substring(0, 8)}' : '#YD-$rawId');
                 final status = (order['status']?.toString() ?? 'PLANNED').toUpperCase();
                 final createdAt = order['createdAt']?.toString() ?? '';
@@ -1103,9 +1115,60 @@ class _HomeScreenState extends State<HomeScreen> {
                   badgeText = const Color(0xFFDC2626);
                 }
 
+                final pricing = (order['pricing'] is Map) ? (order['pricing'] as Map<String, dynamic>) : null;
+                final subtotalRaw = pricing?['subtotal'] ?? order['subtotal'];
+                final discountRaw = pricing?['discount'] ?? order['discount'];
+                final totalRaw = pricing?['total'] ??
+                    order['amount'] ??
+                    order['finalAmount'] ??
+                    order['totalAmount'] ??
+                    order['total'];
+
                 final itemsList = (order['items'] is List) ? (order['items'] as List) : [];
-                final itemCount = itemsList.fold<int>(0, (sum, i) => sum + ((i['quantity'] as num?)?.toInt() ?? 1));
-                final totalAmt = (order['finalAmount'] ?? order['totalAmount'] ?? 0).toString();
+                final mappedItems = itemsList.map((it) {
+                  final name = it['name']?.toString() ?? it['item']?.toString() ?? 'Laundry Item';
+                  final service = it['serviceName']?.toString() ?? it['service']?.toString() ?? 'Care Service';
+                  final qty = (it['quantity'] as num?)?.toInt() ?? 1;
+                  final unitP = (it['unitPrice'] as num?)?.toInt() ?? (it['price'] as num?)?.toInt();
+                  final lineT = (it['lineTotal'] as num?)?.toInt();
+
+                  int price = 0;
+                  if (lineT != null && lineT > 0) {
+                    price = lineT;
+                  } else if (unitP != null && unitP > 0) {
+                    price = unitP * qty;
+                  } else {
+                    final catalogMatch = CartManager.instance.catalog.where(
+                      (c) => c.name.toLowerCase() == name.toLowerCase(),
+                    );
+                    if (catalogMatch.isNotEmpty) {
+                      price = catalogMatch.first.price * qty;
+                    }
+                  }
+
+                  return {
+                    'name': name,
+                    'service': service,
+                    'quantity': qty,
+                    'price': price,
+                  };
+                }).toList();
+
+                final computedSubtotal = mappedItems.fold<int>(
+                  0,
+                  (sum, i) => sum + ((i['price'] as num?)?.toInt() ?? 0),
+                );
+                final subtotalVal = (subtotalRaw as num?)?.toInt() ??
+                    (computedSubtotal > 0 ? computedSubtotal : 0);
+                final discountVal = (discountRaw as num?)?.toInt() ?? 0;
+                final grandTotalVal = (totalRaw as num?)?.toInt() ??
+                    (subtotalVal > 0 ? (subtotalVal - discountVal) : computedSubtotal);
+
+                final itemCount = mappedItems.fold<int>(
+                  0,
+                  (sum, i) => sum + ((i['quantity'] as num?)?.toInt() ?? 1),
+                );
+                final totalAmt = grandTotalVal.toString();
 
                 final bool isActive = status != 'DELIVERED' && status != 'COMPLETED' && status != 'CANCELLED';
 
@@ -1131,9 +1194,18 @@ class _HomeScreenState extends State<HomeScreen> {
                         final addrLine = order['address']?['line']?.toString() ?? '';
                         final addrCity = order['address']?['city']?.toString() ?? '';
                         final addrPin = order['address']?['pincode']?.toString() ?? '';
-                        final fullAddr = [addrLine, addrCity, addrPin]
-                            .where((s) => s.isNotEmpty)
-                            .join(', ');
+
+                        String fullAddr = addrLine;
+                        if (fullAddr.isEmpty) {
+                          fullAddr = [addrCity, addrPin].where((s) => s.isNotEmpty).join(', ');
+                        } else {
+                          if (addrCity.isNotEmpty && !fullAddr.toLowerCase().contains(addrCity.toLowerCase())) {
+                            fullAddr += ', $addrCity';
+                          }
+                          if (addrPin.isNotEmpty && !fullAddr.contains(addrPin)) {
+                            fullAddr += ' - $addrPin';
+                          }
+                        }
 
                         Navigator.of(context).push(
                           MaterialPageRoute(
@@ -1143,15 +1215,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               status: status,
                               dateSubtitle: 'Ordered on $dateDisplay',
                               deliveryAddress: fullAddr.isNotEmpty ? fullAddr : 'Doorstep Delivery',
-                              items: itemsList.map((it) => {
-                                'name': it['name'] ?? it['item'] ?? 'Laundry Item',
-                                'service': it['service'] ?? 'Care Service',
-                                'quantity': (it['quantity'] as num?)?.toInt() ?? 1,
-                                'price': (it['price'] as num?)?.toInt() ?? 0,
-                              }).toList(),
-                              subtotal: (order['subtotal'] as num?)?.toInt() ?? int.tryParse(totalAmt) ?? 0,
-                              discount: (order['discount'] as num?)?.toInt() ?? 0,
-                              grandTotal: (order['finalAmount'] as num?)?.toInt() ?? int.tryParse(totalAmt) ?? 0,
+                              items: mappedItems,
+                              subtotal: subtotalVal,
+                              discount: discountVal,
+                              grandTotal: grandTotalVal,
                               riderName: order['rider']?['name']?.toString() ?? 'Assigned Partner',
                               rating: 5.0,
                             ),

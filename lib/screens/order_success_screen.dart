@@ -13,10 +13,63 @@ class OrderSuccessScreen extends StatelessWidget {
 
   const OrderSuccessScreen({
     super.key,
-    this.orderId = '#YD-892740',
+    this.orderId = '#YD-100001',
     this.rawOrderId,
-    this.estimatedDelivery = 'Tomorrow, Oct 25\nBy 6:00 PM',
+    this.estimatedDelivery = '',
   });
+
+  String get cleanOrderId {
+    final clean = orderId
+        .replaceAll('YD-YD-', 'YD-')
+        .replaceAll('#YD-YD-', '#YD-')
+        .trim();
+    if (clean.startsWith('#')) return clean;
+    return '#$clean';
+  }
+
+  String _formatDeliveryDate(String etaRaw) {
+    final now = DateTime.now();
+    DateTime target = now.add(const Duration(hours: 24));
+
+    if (etaRaw.contains('T') || RegExp(r'^\d{4}-\d{2}-\d{2}').hasMatch(etaRaw)) {
+      try {
+        target = DateTime.parse(etaRaw).toLocal();
+      } catch (_) {}
+    } else if (etaRaw.trim().isNotEmpty &&
+        !etaRaw.toLowerCase().contains('oct 25') &&
+        !etaRaw.toLowerCase().contains('standard delivery')) {
+      final parts = etaRaw.split('\n');
+      if (parts.isNotEmpty && parts[0].trim().isNotEmpty) {
+        return parts[0].trim();
+      }
+    }
+
+    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final diffDays = target.difference(DateTime(now.year, now.month, now.day)).inDays;
+
+    if (diffDays <= 1) {
+      return 'Tomorrow, ${target.day} ${months[target.month - 1]}';
+    } else if (diffDays == 2) {
+      return 'In 2 Days, ${target.day} ${months[target.month - 1]}';
+    } else {
+      final weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      return '${weekdays[target.weekday - 1]}, ${target.day} ${months[target.month - 1]}';
+    }
+  }
+
+  String _formatDeliveryTime(String etaRaw) {
+    if (etaRaw.contains('By ') || etaRaw.contains('PM') || etaRaw.contains('AM')) {
+      final match = RegExp(
+        r'(By\s+\d{1,2}:\d{2}\s+(?:AM|PM)|\d{1,2}:\d{2}\s+(?:AM|PM))',
+        caseSensitive: false,
+      ).firstMatch(etaRaw);
+      if (match != null) {
+        final text = match.group(0)!;
+        return text.startsWith('By ') ? text : 'By $text';
+      }
+    }
+    return 'By 6:00 PM';
+  }
 
   void _onBackToHome(BuildContext context) {
     CartManager.instance.clearCart();
@@ -118,7 +171,7 @@ class OrderSuccessScreen extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          orderId,
+                          cleanOrderId,
                           style: GoogleFonts.plusJakartaSans(
                             fontSize: 15,
                             fontWeight: FontWeight.w800,
@@ -147,7 +200,7 @@ class OrderSuccessScreen extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
                             Text(
-                              'Tomorrow, Oct 25',
+                              _formatDeliveryDate(estimatedDelivery),
                               style: GoogleFonts.plusJakartaSans(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w700,
@@ -156,7 +209,7 @@ class OrderSuccessScreen extends StatelessWidget {
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              'By 6:00 PM',
+                              _formatDeliveryTime(estimatedDelivery),
                               style: GoogleFonts.plusJakartaSans(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
@@ -213,12 +266,13 @@ class OrderSuccessScreen extends StatelessWidget {
                 text: 'Track Order',
                 onPressed: () {
                   CartManager.instance.clearCart();
+                  final deliveryLabel = '${_formatDeliveryDate(estimatedDelivery)} • ${_formatDeliveryTime(estimatedDelivery)}';
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(
                       builder: (context) => TrackOrderScreen(
-                        orderId: orderId,
+                        orderId: cleanOrderId,
                         rawOrderId: rawOrderId,
-                        estimatedDelivery: estimatedDelivery.replaceAll('\n', ' • '),
+                        estimatedDelivery: deliveryLabel,
                       ),
                     ),
                   );
