@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import '../models/laundry_item.dart';
+import '../services/customer_api_service.dart';
 
 class CartManager extends ChangeNotifier {
   static final CartManager instance = CartManager._internal();
@@ -20,6 +21,69 @@ class CartManager extends ChangeNotifier {
   int _couponDiscountPercent = 20;
 
   List<LaundryItem> get catalog => _catalog;
+
+  /// True once the price list has come from the server rather than the
+  /// built-in fallback.
+  bool get catalogIsLive => _catalogIsLive;
+  bool _catalogIsLive = false;
+  bool _catalogLoading = false;
+
+  /// Pull the live price list. The hardcoded catalogue below stays as the
+  /// offline fallback, so the app still works with no network - but whenever
+  /// the server answers, its prices win. Without this, a price changed in the
+  /// admin panel never reached the app and the customer was quoted one figure
+  /// while the server charged another.
+  Future<void> loadCatalogFromServer({bool force = false}) async {
+    if (_catalogLoading) return;
+    if (_catalogIsLive && !force) return;
+    _catalogLoading = true;
+    try {
+      final rows = await CustomerApiService.instance.getCatalogItems();
+      final mapped = <LaundryItem>[];
+      for (final row in rows) {
+        final code = row['code']?.toString();
+        final name = row['name']?.toString();
+        if (code == null || code.isEmpty || name == null || name.isEmpty) continue;
+
+        final service = row['serviceCategory'];
+        final category = serviceCategoryFromCode(
+          service is Map ? service['code']?.toString() : null,
+        );
+        if (category == null) continue; // a service this build has no tab for
+
+        mapped.add(LaundryItem(
+          id: code,
+          name: name,
+          category: category,
+          price: (row['price'] as num?)?.round() ?? 0,
+          unit: row['unit']?.toString() ?? 'pc',
+          iconKey: row['iconKey']?.toString() ?? 'shirt',
+          // keep anything already in the basket
+          quantity: _quantityFor(code),
+        ));
+      }
+
+      if (mapped.isNotEmpty) {
+        _catalog
+          ..clear()
+          ..addAll(mapped);
+        _catalogIsLive = true;
+        notifyListeners();
+      }
+    } catch (e) {
+      // keep the fallback prices; the basket still works offline
+      debugPrint('Could not load the live price list: $e');
+    } finally {
+      _catalogLoading = false;
+    }
+  }
+
+  int _quantityFor(String id) {
+    for (final item in _catalog) {
+      if (item.id == id) return item.quantity;
+    }
+    return 0;
+  }
   String get selectedDate => _selectedDate;
   String get selectedSlot => _selectedSlot;
   String get pickupAddress => _pickupAddress;

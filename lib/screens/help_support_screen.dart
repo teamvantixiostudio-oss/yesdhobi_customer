@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
+import '../services/customer_api_service.dart';
 
 class HelpSupportScreen extends StatefulWidget {
   const HelpSupportScreen({super.key});
@@ -19,7 +20,9 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
     'Delivery',
   ];
 
-  final List<Map<String, String>> _faqList = [
+  /// Replaced by the server's help centre as soon as it answers; these stay
+  /// as the offline fallback so the screen is never empty.
+  List<Map<String, String>> _faqList = [
     {
       'question': 'How do I schedule a pickup?',
       'answer':
@@ -51,6 +54,44 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
       'category': 'Delivery',
     },
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFaqs();
+  }
+
+  Future<void> _loadFaqs() async {
+    try {
+      final rows = await CustomerApiService.instance.getFaqs();
+      if (!mounted || rows.isEmpty) return;
+      final mapped = <Map<String, String>>[];
+      for (final row in rows) {
+        final question = row['question']?.toString();
+        final answer = row['answer']?.toString();
+        if (question == null || answer == null) continue;
+        mapped.add({
+          'question': question,
+          'answer': answer,
+          'category': row['category']?.toString() ?? 'Orders',
+        });
+      }
+      if (mapped.isEmpty) return;
+      setState(() {
+        _faqList = mapped;
+        // the server groups by its own categories, so show those tabs
+        final serverCategories = <String>{for (final f in mapped) f['category']!}.toList()..sort();
+        if (serverCategories.isNotEmpty) {
+          _categories
+            ..clear()
+            ..addAll(serverCategories);
+          if (_selectedCategory >= _categories.length) _selectedCategory = 0;
+        }
+      });
+    } catch (e) {
+      debugPrint('Could not load the help centre: $e');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

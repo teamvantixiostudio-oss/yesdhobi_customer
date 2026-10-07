@@ -180,6 +180,45 @@ class CustomerApiService {
   // Catalog & Promo
   // ---------------------------------------------------------------------------
 
+  /// The live price list. Codes here (wf_1, wi_3 ...) are the same ones
+  /// `placeOrder` sends back, so prices can never drift from what we charge.
+  Future<List<Map<String, dynamic>>> getCatalogItems() async {
+    final res = await _client.get('/catalog/items');
+    if (res.containsKey('data') && res['data'] is List) {
+      return List<Map<String, dynamic>>.from(res['data']);
+    }
+    return [];
+  }
+
+  /// Help-centre articles. Optionally filtered by the server-side search.
+  Future<List<Map<String, dynamic>>> getFaqs({String? query}) async {
+    final suffix = (query == null || query.trim().isEmpty)
+        ? ''
+        : '?q=${Uri.encodeQueryComponent(query.trim())}';
+    final res = await _client.get('/support/faqs$suffix');
+    if (res.containsKey('data') && res['data'] is List) {
+      return List<Map<String, dynamic>>.from(res['data']);
+    }
+    return [];
+  }
+
+  /// Phone / WhatsApp / email the customer can reach support on.
+  Future<Map<String, dynamic>> getSupportChannels() async {
+    return await _client.get('/support/channels');
+  }
+
+  Future<Map<String, dynamic>> createSupportTicket({
+    required String subject,
+    required String message,
+    String? orderId,
+  }) async {
+    return await _client.post('/support/tickets', {
+      'subject': subject,
+      'message': message,
+      ?'orderId': orderId,
+    });
+  }
+
   Future<List<Map<String, dynamic>>> getPromotions() async {
     final res = await _client.get('/catalog/promotions');
     if (res.containsKey('data') && res['data'] is List) {

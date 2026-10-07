@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../state/cart_manager.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../widgets/yes_dhobi_logo.dart';
 import '../services/api_client.dart';
@@ -31,6 +32,10 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   void initState() {
     super.initState();
+
+    // Warm the live price list while the splash animation plays, so the item
+    // screen opens on server prices rather than the built-in fallback.
+    CartManager.instance.loadCatalogFromServer();
 
     // 1. Entrance animation
     _entranceController = AnimationController(

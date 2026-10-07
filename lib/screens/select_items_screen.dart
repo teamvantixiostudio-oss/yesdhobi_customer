@@ -27,6 +27,8 @@ class _SelectItemsScreenState extends State<SelectItemsScreen> {
     super.initState();
     _selectedCategory = widget.initialCategory;
     _cartManager.addListener(_onCartChanged);
+    // safety net: the app may have been resumed straight onto this screen
+    _cartManager.loadCatalogFromServer();
   }
 
   @override

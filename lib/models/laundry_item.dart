@@ -10,6 +10,36 @@ enum ServiceCategory {
   const ServiceCategory(this.title);
 }
 
+/// Maps a backend service-category code onto the six tabs this app shows.
+///
+/// The server currently offers nine services; `dry_iron`, `wet_cleaning` and
+/// `stain_removal` have no tab of their own, so they are folded into the
+/// closest one rather than dropped - otherwise those items would be
+/// unorderable in the app. Add a tab here and in the enum above if they
+/// deserve their own.
+ServiceCategory? serviceCategoryFromCode(String? code) {
+  switch (code) {
+    case 'wash_fold':
+      return ServiceCategory.washAndFold;
+    case 'wash_iron':
+      return ServiceCategory.washAndIron;
+    case 'steam_iron':
+    case 'dry_iron':
+      return ServiceCategory.steamIron;
+    case 'dry_cleaning':
+    case 'wet_cleaning':
+    case 'stain_removal':
+      return ServiceCategory.dryCleaning;
+    case 'shoe_cleaning':
+      return ServiceCategory.shoeCleaning;
+    case 'households':
+    case 'household':
+      return ServiceCategory.household;
+    default:
+      return null;
+  }
+}
+
 class LaundryItem {
   final String id;
   final String name;
