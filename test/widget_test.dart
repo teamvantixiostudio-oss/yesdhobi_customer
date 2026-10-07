@@ -105,7 +105,7 @@ void main() {
   });
 
   testWidgets(
-      'Schedule Pickup screen renders date/time slots and Confirm Pickup button',
+      'Instant Pickup screen renders instant mode and Confirm button',
       (WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -113,10 +113,9 @@ void main() {
         home: const SchedulePickupScreen(),
       ),
     );
-    expect(find.text('Schedule Pickup'), findsOneWidget);
-    expect(find.text('Select Pickup Date'), findsOneWidget);
-    expect(find.text('Select Time Slot'), findsOneWidget);
-    expect(find.text('Confirm Pickup'), findsOneWidget);
+    expect(find.text('Instant Pickup'), findsWidgets);
+    expect(find.text('Pickup Timing'), findsOneWidget);
+    expect(find.text('Pickup Location'), findsOneWidget);
   });
 
   testWidgets(

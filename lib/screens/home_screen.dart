@@ -1,7 +1,18 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/services.dart';
+import '../main.dart';
 import '../models/laundry_item.dart';
+import '../services/customer_api_service.dart';
+import '../services/location_service.dart';
+import '../state/cart_manager.dart';
 import '../theme/app_theme.dart';
+import '../widgets/promo_launch_popup.dart';
+import '../widgets/location_selection_sheet.dart';
+import '../widgets/yes_dhobi_logo.dart';
+import 'package:geolocator/geolocator.dart';
 import 'select_items_screen.dart';
 import 'track_order_screen.dart';
 import 'manage_addresses_screen.dart';
@@ -23,13 +34,175 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late int _selectedBottomNav;
-  String _selectedLocation = 'Home - HSR Layout';
+  String _selectedLocation = 'Choose delivery location';
   int _selectedOrderFilter = 0; // 0: Active, 1: Completed, 2: Cancelled
+
+  String _userName = 'Customer';
+  String _userEmail = '';
+  String _userPhone = '';
+  String _referralCode = '';
+  List<Map<String, dynamic>> _promotions = [];
+  List<Map<String, dynamic>> _realOrders = [];
+  bool _isLoadingOrders = false;
+  Map<String, dynamic>? _topActiveOrder;
+
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     _selectedBottomNav = widget.initialTab;
+    _loadUserDataAndOrders();
+
+    // Ensure absolutely no lingering snackbars from previous auth screens bleed onto home
+    clearAllAppSnackBars();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        clearAllAppSnackBars(context);
+      }
+      _checkLocationOnLaunch();
+    });
+  }
+
+  Future<void> _checkLocationOnLaunch() async {
+    try {
+      final isServiceEnabled = await Geolocator.isLocationServiceEnabled();
+      final permission = await Geolocator.checkPermission();
+
+      final hasGpsPermission = isServiceEnabled &&
+          (permission == LocationPermission.always || permission == LocationPermission.whileInUse);
+
+      if (hasGpsPermission) {
+        final geo = await LocationService.instance.getCurrentLocationAddress();
+        if (mounted && geo != null && geo.area.isNotEmpty) {
+          setState(() {
+            _selectedLocation = '📍 ${geo.area}, ${geo.city}';
+          });
+          CartManager.instance.setPickupAddress(
+            geo.formatted,
+            lat: geo.latitude,
+            lng: geo.longitude,
+          );
+          return;
+        }
+      }
+
+      // If location is not enabled or user has not yet chosen an address in this session,
+      // prompt the location selection bottom sheet with options to enable GPS or pick saved addresses
+      final hasChosen = CartManager.instance.pickupAddress.trim().isNotEmpty &&
+          !CartManager.instance.pickupAddress.toLowerCase().contains('choose');
+
+      if (!hasChosen) {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            _showLocationPermissionDialog();
+          }
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            _showLocationPermissionDialog();
+          }
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadUserDataAndOrders() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userRaw = prefs.getString('user_data');
+    if (userRaw != null) {
+      try {
+        final u = jsonDecode(userRaw);
+        if (u['name'] != null && u['name'].toString().isNotEmpty) {
+          _userName = u['name'].toString();
+        }
+        if (u['phone'] != null) _userPhone = u['phone'].toString();
+        if (u['email'] != null) _userEmail = u['email'].toString();
+      } catch (_) {}
+    }
+
+    try {
+      final profile = await CustomerApiService.instance.getProfile();
+      final u = profile['user'] ?? profile;
+      if (u is Map) {
+        if (u['name'] != null && u['name'].toString().isNotEmpty) {
+          _userName = u['name'].toString();
+        }
+        if (u['phone'] != null) _userPhone = u['phone'].toString();
+        if (u['email'] != null) _userEmail = u['email'].toString();
+        await prefs.setString('user_data', jsonEncode(u));
+      }
+      if (profile['referralCode'] != null && profile['referralCode'].toString().isNotEmpty) {
+        _referralCode = profile['referralCode'].toString();
+      } else if (profile['customer'] is Map && profile['customer']['referralCode'] != null) {
+        _referralCode = profile['customer']['referralCode'].toString();
+      }
+    } catch (_) {}
+
+    try {
+      final promos = await CustomerApiService.instance.getPromotions();
+      if (mounted && promos.isNotEmpty) {
+        setState(() => _promotions = promos);
+      }
+    } catch (_) {}
+
+    try {
+      final addrs = await CustomerApiService.instance.getAddresses();
+      if (addrs.isNotEmpty) {
+        final def = addrs.firstWhere((a) => a['isDefault'] == true, orElse: () => addrs.first);
+        final tag = def['label']?.toString() ?? 'Home';
+        final line1 = def['line1']?.toString() ?? def['street']?.toString() ?? '';
+        final city = def['city']?.toString() ?? 'Hyderabad';
+        final area = line1.isNotEmpty ? line1 : city;
+        _selectedLocation = '$tag - $area';
+      }
+    } catch (_) {}
+
+    try {
+      final active = await CustomerApiService.instance.getActiveOrders();
+      if (active.isNotEmpty) {
+        _topActiveOrder = active.first;
+      } else {
+        _topActiveOrder = null;
+      }
+    } catch (_) {}
+
+    _fetchOrdersByFilter(_selectedOrderFilter);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _fetchOrdersByFilter(int filterIndex) async {
+    if (!mounted) return;
+    setState(() => _isLoadingOrders = true);
+    String status = 'all';
+    if (filterIndex == 0) {
+      status = 'active';
+    } else if (filterIndex == 1) {
+      status = 'completed';
+    } else if (filterIndex == 2) {
+      status = 'cancelled';
+    }
+
+    try {
+      final list = await CustomerApiService.instance.getOrders(status: status);
+      if (mounted) {
+        setState(() {
+          _realOrders = list;
+          _isLoadingOrders = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingOrders = false);
+    }
   }
 
   final List<Map<String, dynamic>> _serviceCards = [
@@ -37,51 +210,65 @@ class _HomeScreenState extends State<HomeScreen> {
       'title': 'Wash & Fold',
       'price': 'From ₹49',
       'category': ServiceCategory.washAndFold,
+      'image': 'assets/images/service_wash_fold.jpg',
       'bg': const Color(0xFFEFF6FF),
       'tint': const Color(0xFF2563EB),
+      'badge': 'POPULAR',
       'icon': Icons.dry_cleaning_outlined,
     },
     {
       'title': 'Wash & Iron',
       'price': 'From ₹69',
       'category': ServiceCategory.washAndIron,
-      'bg': const Color(0xFFE8FBF4),
-      'tint': const Color(0xFF0D9488),
-      'icon': Icons.highlight_off_rounded,
+      'image': 'assets/images/service_wash_iron.jpg',
+      'bg': const Color(0xFFECFDF5),
+      'tint': const Color(0xFF059669),
+      'badge': 'BEST VALUE',
+      'icon': Icons.iron_rounded,
     },
     {
       'title': 'Steam Iron',
       'price': 'From ₹39',
       'category': ServiceCategory.steamIron,
-      'bg': const Color(0xFFFEF9C3),
-      'tint': const Color(0xFFCA8A04),
+      'image': 'assets/images/service_steam_iron.jpg',
+      'bg': const Color(0xFFFEF3C7),
+      'tint': const Color(0xFFD97706),
+      'badge': 'EXPRESS',
       'icon': Icons.sanitizer_outlined,
     },
     {
       'title': 'Dry Cleaning',
       'price': 'From ₹149',
       'category': ServiceCategory.dryCleaning,
+      'image': 'assets/images/service_dry_clean.png',
       'bg': const Color(0xFFFDF2F8),
       'tint': const Color(0xFFDB2777),
+      'badge': 'PREMIUM',
       'icon': Icons.checkroom_rounded,
     },
     {
-      'title': 'Shoe\nCleaning',
+      'title': 'Shoe Cleaning',
       'price': 'From ₹199',
       'category': ServiceCategory.shoeCleaning,
-      'bg': const Color(0xFFEFF6FF),
-      'tint': const Color(0xFF3B82F6),
-      'icon': Icons.highlight_off_rounded,
+      'image': 'assets/images/service_shoe_clean.png',
+      'bg': const Color(0xFFE0F2FE),
+      'tint': const Color(0xFF0284C7),
+      'badge': 'CARE+',
+      'icon': Icons.cleaning_services_rounded,
     },
     {
       'title': 'Household',
       'price': 'From ₹299',
       'category': ServiceCategory.household,
+      'image': 'assets/images/service_household.png',
       'bg': const Color(0xFFF3E8FF),
       'tint': const Color(0xFF9333EA),
+      'badge': 'BULKY',
       'icon': Icons.home_outlined,
     },
   ];
+
+
 
   void _onServiceSelected(ServiceCategory category) {
     Navigator.of(context).push(
@@ -169,80 +356,138 @@ class _HomeScreenState extends State<HomeScreen> {
   // ================= TAB 0: HOME CONTENT =================
   Widget _buildHomeContent() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      controller: _scrollController,
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Top Delivering to Header
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          // 1. Top Store Hero Background Image with Address & Notification Bell (Exact Image 2 Adjustment)
+          Stack(
+            clipBehavior: Clip.none,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'DELIVERING TO',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: const Color(0xFF64748B),
-                      letterSpacing: 0.6,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  GestureDetector(
-                    onTap: _showAddressSelectionModal,
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.location_on_rounded,
-                          color: AppColors.primary,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          _selectedLocation,
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        const Icon(
-                          Icons.keyboard_arrow_down_rounded,
-                          color: AppColors.textPrimary,
-                          size: 20,
-                        ),
+              // Store Background Image (Full width, top aligned)
+              SizedBox(
+                width: double.infinity,
+                height: 255,
+                child: Image.asset(
+                  'assets/images/hero_store.png',
+                  fit: BoxFit.cover,
+                  alignment: Alignment.topCenter,
+                ),
+              ),
+
+              // Soft top gradient for address contrast & readability
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: 110,
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.white.withValues(alpha: 0.78),
+                        Colors.white.withValues(alpha: 0.0),
                       ],
                     ),
                   ),
-                ],
-              ),
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFFE2E8F0)),
                 ),
-                child: Center(
-                  child: Stack(
+              ),
+
+              // Address Bar and Notification Button
+              SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Icon(
-                        Icons.notifications_none_rounded,
-                        color: AppColors.textPrimary,
-                        size: 22,
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: _showLocationPermissionDialog,
+                          behavior: HitTestBehavior.opaque,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Select address',
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                  color: const Color(0xFF0F172A),
+                                  letterSpacing: -0.3,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      _selectedLocation,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: const Color(0xFF334155),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Icon(
+                                    Icons.keyboard_arrow_down_rounded,
+                                    color: Color(0xFF334155),
+                                    size: 18,
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                      Positioned(
-                        right: 2,
-                        top: 2,
+                      GestureDetector(
+                        onTap: () {
+                          PromoLaunchPopup.show(context);
+                        },
                         child: Container(
-                          width: 8,
-                          height: 8,
-                          decoration: const BoxDecoration(
-                            color: AppColors.primary,
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
                             shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.12),
+                                blurRadius: 10,
+                                offset: const Offset(0, 3),
+                              ),
+                            ],
+                          ),
+                          child: Center(
+                            child: Stack(
+                              children: [
+                                const Icon(
+                                  Icons.notifications_none_rounded,
+                                  color: Color(0xFF0F172A),
+                                  size: 22,
+                                ),
+                                Positioned(
+                                  right: 2,
+                                  top: 2,
+                                  child: Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: const BoxDecoration(
+                                      color: AppColors.primary,
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -253,835 +498,841 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
 
-          const SizedBox(height: 24),
-
-          // Greeting
-          Text(
-            'Good Morning, Rahul!',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              color: AppColors.textPrimary,
-              letterSpacing: -0.4,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            "Let's fresh up your clothes today.",
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 14,
-              fontWeight: FontWeight.w400,
-              color: const Color(0xFF64748B),
-            ),
-          ),
-
-          const SizedBox(height: 20),
-
-          // Search Bar
-          Container(
-            height: 52,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFFE2E8F0)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.02),
-                  blurRadius: 10,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.search_rounded,
-                  color: Color(0xFF94A3B8),
-                  size: 22,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    onSubmitted: (val) {
-                      _onServiceSelected(ServiceCategory.washAndFold);
-                    },
-                    decoration: InputDecoration(
-                      hintText: 'Search for Dry Clean, Iron, etc...',
-                      hintStyle: GoogleFonts.plusJakartaSans(
-                        fontSize: 14,
-                        color: const Color(0xFF94A3B8),
-                      ),
-                      border: InputBorder.none,
-                      isDense: true,
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 20),
-
-          // Promo Banner Card
-          GestureDetector(
-            onTap: () => _onServiceSelected(ServiceCategory.washAndFold),
+          // 2. Overlapping White Sheet with Rounded Top Corners (Exact Image 2 Style)
+          Transform.translate(
+            offset: const Offset(0, -32),
             child: Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF1E3A8A), Color(0xFF1D4ED8)],
-                  begin: Alignment.centerLeft,
-                  end: Alignment.centerRight,
-                ),
-                borderRadius: BorderRadius.circular(20),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF1E3A8A).withValues(alpha: 0.25),
+                    color: Color(0x14000000),
                     blurRadius: 16,
-                    offset: const Offset(0, 8),
+                    offset: Offset(0, -6),
                   ),
                 ],
               ),
-              child: Row(
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  // Greeting (from Image 1)
+                  Text(
+                    'Good Morning, ${_userName.split(' ').first}!',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary,
+                      letterSpacing: -0.4,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    "Let's fresh up your clothes today.",
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w400,
+                      color: const Color(0xFF64748B),
+                    ),
+                  ),
+
+                  if (_topActiveOrder != null) ...[
+                    const SizedBox(height: 18),
+                    _buildActiveOrderBanner(),
+                  ],
+
+                  const SizedBox(height: 18),
+
+                  // Search Bar (from Image 1)
+                  Container(
+                    height: 52,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.02),
+                          blurRadius: 10,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Row(
                       children: [
-                        // Badge
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFEAB308),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            'FIRSTORDER',
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w800,
-                              color: const Color(0xFF0F172A),
-                              letterSpacing: 0.4,
+                        const Icon(
+                          Icons.search_rounded,
+                          color: Color(0xFF94A3B8),
+                          size: 22,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TextField(
+                            onSubmitted: (val) {
+                              _onServiceSelected(ServiceCategory.washAndFold);
+                            },
+                            decoration: InputDecoration(
+                              hintText: 'Search for Dry Clean, Iron, etc...',
+                              hintStyle: GoogleFonts.plusJakartaSans(
+                                fontSize: 14,
+                                color: const Color(0xFF94A3B8),
+                              ),
+                              border: InputBorder.none,
+                              isDense: true,
+                              contentPadding: EdgeInsets.zero,
                             ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Get 20% OFF your first\norder!',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                            height: 1.25,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'Valid on any laundry or dry clean service.',
-                          style: GoogleFonts.plusJakartaSans(
-                            fontSize: 12,
-                            color: Colors.white.withValues(alpha: 0.8),
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Container(
-                    width: 96,
-                    height: 96,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(16),
-                      color: Colors.white.withValues(alpha: 0.1),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: Image.asset(
-                      'assets/images/laundry_basket.jpg',
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) => Container(
-                        color: Colors.white.withValues(alpha: 0.15),
-                        child: const Icon(
-                          Icons.shopping_basket_outlined,
-                          color: Colors.white,
-                          size: 40,
+
+                  const SizedBox(height: 18),
+
+                  // Promo Banner Card (from Image 1)
+                  GestureDetector(
+                    onTap: () => PromoLaunchPopup.show(context),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF1E3A8A), Color(0xFF1D4ED8)],
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
                         ),
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF1E3A8A).withValues(alpha: 0.25),
+                            blurRadius: 16,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
                       ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 28),
-
-          // Choose Service Section
-          Text(
-            'Choose Service',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // 3 Columns x 2 Rows Grid
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: _serviceCards.length,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              crossAxisSpacing: 10,
-              mainAxisSpacing: 12,
-              childAspectRatio: 0.76,
-            ),
-            itemBuilder: (context, index) {
-              final card = _serviceCards[index];
-              return Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: const Color(0xFFF1F5F9), width: 1.4),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.02),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(18),
-                    onTap: () {
-                      _onServiceSelected(card['category'] as ServiceCategory);
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                      child: Row(
                         children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Badge
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFEAB308),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    'FIRSTORDER',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800,
+                                      color: const Color(0xFF0F172A),
+                                      letterSpacing: 0.4,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'Get 20% OFF your first\norder!',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white,
+                                    height: 1.25,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Valid on any laundry or dry clean service.',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 12,
+                                    color: Colors.white.withValues(alpha: 0.8),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 12),
                           Container(
-                            width: 40,
-                            height: 40,
+                            width: 96,
+                            height: 96,
                             decoration: BoxDecoration(
-                              color: card['bg'] as Color,
-                              borderRadius: BorderRadius.circular(12),
+                              borderRadius: BorderRadius.circular(16),
+                              color: Colors.white.withValues(alpha: 0.1),
                             ),
-                            child: Icon(
-                              card['icon'] as IconData,
-                              color: card['tint'] as Color,
-                              size: 20,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            card['title'] as String,
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary,
-                              height: 1.15,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            card['price'] as String,
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.primary,
+                            clipBehavior: Clip.antiAlias,
+                            child: Image.asset(
+                              'assets/images/laundry_basket.jpg',
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) => Container(
+                                color: Colors.white.withValues(alpha: 0.15),
+                                child: const Icon(
+                                  Icons.shopping_basket_outlined,
+                                  color: Colors.white,
+                                  size: 40,
+                                ),
+                              ),
                             ),
                           ),
                         ],
                       ),
                     ),
                   ),
-                ),
-              );
-            },
-          ),
 
-          const SizedBox(height: 20),
+                  const SizedBox(height: 28),
+
+                  // Choose Service Section (Task 3 with 3D Cards)
+                  Text(
+                    'Choose Service',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // 3 Columns x 2 Rows 3D Grid
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: _serviceCards.length,
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 12,
+                      childAspectRatio: 0.85,
+                    ),
+                    itemBuilder: (context, index) {
+                      final card = _serviceCards[index];
+                      return _build3DServiceCard(card);
+                    },
+                  ),
+
+                  const SizedBox(height: 32),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  // ================= TAB 1: MY ORDERS (SCREENSHOT 2) =================
-  Widget _buildMyOrdersContent() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'My Orders',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 16),
+  Widget _build3DServiceCard(Map<String, dynamic> card) {
+    final imagePath = card['image'] as String?;
+    final title = card['title'] as String;
+    final price = card['price'] as String;
+    final category = card['category'] as ServiceCategory;
+    final tint = card['tint'] as Color? ?? AppColors.primary;
+    final bg = card['bg'] as Color? ?? const Color(0xFFEFF6FF);
 
-          // Filter Segment Pills: Active, Completed, Cancelled
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            child: Row(
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFF1F5F9), width: 1.4),
+        boxShadow: [
+          BoxShadow(
+            color: tint.withValues(alpha: 0.08),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: () => _onServiceSelected(category),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _buildOrderFilterChip('Active', 0),
-                const SizedBox(width: 10),
-                _buildOrderFilterChip('Completed', 1),
-                const SizedBox(width: 10),
-                _buildOrderFilterChip('Cancelled', 2),
+                // Medium 3D Artwork
+                Container(
+                  width: 70,
+                  height: 70,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: tint.withValues(alpha: 0.12),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: imagePath != null
+                        ? Image.asset(
+                            imagePath,
+                            fit: BoxFit.cover,
+                            errorBuilder: (ctx, err, stack) => Container(
+                              color: bg,
+                              child: Icon(
+                                card['icon'] as IconData? ?? Icons.local_laundry_service,
+                                color: tint,
+                                size: 34,
+                              ),
+                            ),
+                          )
+                        : Container(
+                            color: bg,
+                            child: Icon(
+                              card['icon'] as IconData? ?? Icons.local_laundry_service,
+                              color: tint,
+                              size: 34,
+                            ),
+                          ),
+                  ),
+                ),
+
+                const SizedBox(height: 6),
+
+                // Title
+                Text(
+                  title,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFF0F172A),
+                    height: 1.15,
+                  ),
+                ),
+
+                const SizedBox(height: 3),
+
+                // Price Badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: tint.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    price,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: tint,
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
 
-          const SizedBox(height: 20),
+  Widget _buildActiveOrderBanner() {
+    final rawNumber = _topActiveOrder!['orderNumber']?.toString() ?? '100001';
+    final cleanNumber = rawNumber.replaceAll('#', '').replaceAll('YD-', '');
+    final statusText = _topActiveOrder!['statusLabel']?.toString() ?? 'Processing at facility';
 
-          // Order Card 1: Active
-          if (_selectedOrderFilter == 0 || _selectedOrderFilter == -1)
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => TrackOrderScreen(
+              orderId: '#YD-$cleanNumber',
+              rawOrderId: _topActiveOrder!['id']?.toString(),
+            ),
+          ),
+        );
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF1D4ED8).withValues(alpha: 0.25),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
             Container(
-              margin: const EdgeInsets.only(bottom: 16),
+              width: 42,
+              height: 42,
               decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.local_laundry_service_outlined,
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: const Color(0xFFE2E8F0), width: 1.2),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.02),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'ACTIVE ORDER #YD-$cleanNumber',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFFE2C07D),
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    statusText,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
                   ),
                 ],
               ),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(18),
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (context) => const OrderDetailsScreen(
-                          orderId: '#YD-892740',
-                          status: 'RIDER ON WAY',
-                          dateSubtitle: 'Ordered on 24 Oct 2026, 11:30 AM',
-                          items: [
-                            {
-                              'name': 'Shirt',
-                              'service': 'Wash & Iron',
-                              'quantity': 2,
-                              'price': 80,
-                            },
-                            {
-                              'name': 'T-Shirt',
-                              'service': 'Wash & Iron',
-                              'quantity': 1,
-                              'price': 30,
-                            },
-                            {
-                              'name': 'Bedsheet',
-                              'service': 'Wash & Fold',
-                              'quantity': 1,
-                              'price': 120,
-                            },
-                          ],
-                          subtotal: 230,
-                          discount: 46,
-                          grandTotal: 184,
-                          riderName: 'Ramesh Kumar',
-                          rating: 5.0,
-                        ),
-                      ),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'YD-892740',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.textPrimary,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '24 Oct 2026',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 12,
-                                    color: const Color(0xFF64748B),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFEFF6FF),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                'RIDER ON WAY',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w800,
-                                  color: AppColors.primary,
-                                  letterSpacing: 0.4,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'ITEMS & SERVICE',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: const Color(0xFF94A3B8),
-                                    letterSpacing: 0.4,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '4 Items • Wash & Iron',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.textPrimary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(
-                                  'TOTAL AMOUNT',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: const Color(0xFF94A3B8),
-                                    letterSpacing: 0.4,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '₹184',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.primary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 46,
-                          child: ElevatedButton(
-                            onPressed: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) => const TrackOrderScreen(
-                                    orderId: 'YD-892740',
-                                  ),
-                                ),
-                              );
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primary,
-                              foregroundColor: Colors.white,
-                              elevation: 0,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            child: Text(
-                              'Track Order',
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+            ),
+            const SizedBox(width: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                'Track',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.primary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ================= TAB 1: MY ORDERS =================
+  Widget _buildMyOrdersContent() {
+    return RefreshIndicator(
+      onRefresh: () async {
+        await _fetchOrdersByFilter(_selectedOrderFilter);
+      },
+      color: AppColors.primary,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'My Orders',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textPrimary,
                   ),
                 ),
+                IconButton(
+                  icon: const Icon(Icons.refresh_rounded, color: AppColors.primary),
+                  onPressed: () => _fetchOrdersByFilter(_selectedOrderFilter),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            // Filter Segment Pills: Active, Completed, Cancelled
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                children: [
+                  _buildOrderFilterChip('Active', 0),
+                  const SizedBox(width: 10),
+                  _buildOrderFilterChip('Completed', 1),
+                  const SizedBox(width: 10),
+                  _buildOrderFilterChip('Cancelled', 2),
+                ],
               ),
             ),
 
-          // Order Card 2: Completed
-          if (_selectedOrderFilter == 1 || _selectedOrderFilter == -1)
-            Container(
-              margin: const EdgeInsets.only(bottom: 16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: const Color(0xFFE2E8F0), width: 1.2),
-              ),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(18),
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (context) => const OrderDetailsScreen(
-                          orderId: '#YD-881590',
-                          status: 'DELIVERED',
-                          dateSubtitle: 'Completed on 18 Oct 2026, 4:15 PM',
-                          items: [
-                            {
-                              'name': 'Shirt',
-                              'service': 'Wash & Iron',
-                              'quantity': 2,
-                              'price': 80,
-                            },
-                            {
-                              'name': 'T-Shirt',
-                              'service': 'Wash & Iron',
-                              'quantity': 1,
-                              'price': 30,
-                            },
-                            {
-                              'name': 'Bedsheet',
-                              'service': 'Wash & Fold',
-                              'quantity': 1,
-                              'price': 120,
-                            },
-                          ],
-                          subtotal: 230,
-                          discount: 46,
-                          grandTotal: 184,
-                          riderName: 'Rahul',
-                          rating: 5.0,
+            const SizedBox(height: 20),
+
+            if (_isLoadingOrders)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(
+                  child: CircularProgressIndicator(color: AppColors.primary),
+                ),
+              )
+            else if (_realOrders.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFFF1F5F9), width: 1.5),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 64,
+                      height: 64,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFF8FAFC),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.receipt_long_outlined,
+                        color: Color(0xFF94A3B8),
+                        size: 32,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'No Orders Found',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _selectedOrderFilter == 0
+                          ? 'You have no active orders in progress.'
+                          : _selectedOrderFilter == 1
+                              ? 'You have no completed orders yet.'
+                              : 'You have no cancelled orders.',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 13,
+                        color: const Color(0xFF64748B),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    ElevatedButton(
+                      onPressed: () {
+                        setState(() => _selectedBottomNav = 0);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 12,
                         ),
                       ),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'YD-881590',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.textPrimary,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '18 Oct 2026',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 12,
-                                    color: const Color(0xFF64748B),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFECFDF5),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                'DELIVERED',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w800,
-                                  color: const Color(0xFF059669),
-                                  letterSpacing: 0.4,
-                                ),
-                              ),
-                            ),
-                          ],
+                      child: Text(
+                        'Book Laundry Now',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
                         ),
-                        const SizedBox(height: 16),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'ITEMS & SERVICE',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: const Color(0xFF94A3B8),
-                                    letterSpacing: 0.4,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '4 Items • Wash & Fold',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.textPrimary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(
-                                  'TOTAL AMOUNT',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: const Color(0xFF94A3B8),
-                                    letterSpacing: 0.4,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '₹184',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.primary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 46,
-                          child: OutlinedButton(
-                            onPressed: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) => const SelectItemsScreen(
-                                    initialCategory: ServiceCategory.washAndFold,
-                                  ),
-                                ),
-                              );
-                            },
-                            style: OutlinedButton.styleFrom(
-                              side: const BorderSide(color: Color(0xFFE2E8F0)),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            child: Text(
-                              'Reorder',
-                              style: GoogleFonts.plusJakartaSans(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.textPrimary,
-                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              ..._realOrders.map((order) {
+                final rawId = order['id']?.toString() ?? '';
+                final orderNum = order['orderNumber'] != null
+                    ? '#YD-${order['orderNumber']}'
+                    : (rawId.length > 8 ? '#YD-${rawId.substring(0, 8)}' : '#YD-$rawId');
+                final status = (order['status']?.toString() ?? 'PLANNED').toUpperCase();
+                final createdAt = order['createdAt']?.toString() ?? '';
+                String dateDisplay = 'Recent';
+                if (createdAt.isNotEmpty) {
+                  try {
+                    final dt = DateTime.parse(createdAt).toLocal();
+                    final months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                    dateDisplay = '${dt.day} ${months[dt.month - 1]} ${dt.year}';
+                  } catch (_) {
+                    dateDisplay = createdAt.split('T').first;
+                  }
+                }
+
+                Color badgeBg = const Color(0xFFEFF6FF);
+                Color badgeText = AppColors.primary;
+                if (status == 'DELIVERED' || status == 'COMPLETED') {
+                  badgeBg = const Color(0xFFECFDF5);
+                  badgeText = const Color(0xFF059669);
+                } else if (status == 'CANCELLED') {
+                  badgeBg = const Color(0xFFFEF2F2);
+                  badgeText = const Color(0xFFDC2626);
+                }
+
+                final itemsList = (order['items'] is List) ? (order['items'] as List) : [];
+                final itemCount = itemsList.fold<int>(0, (sum, i) => sum + ((i['quantity'] as num?)?.toInt() ?? 1));
+                final totalAmt = (order['finalAmount'] ?? order['totalAmount'] ?? 0).toString();
+
+                final bool isActive = status != 'DELIVERED' && status != 'COMPLETED' && status != 'CANCELLED';
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: const Color(0xFFE2E8F0), width: 1.2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.02),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: () {
+                        final addrLine = order['address']?['line']?.toString() ?? '';
+                        final addrCity = order['address']?['city']?.toString() ?? '';
+                        final addrPin = order['address']?['pincode']?.toString() ?? '';
+                        final fullAddr = [addrLine, addrCity, addrPin]
+                            .where((s) => s.isNotEmpty)
+                            .join(', ');
+
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => OrderDetailsScreen(
+                              orderId: orderNum,
+                              rawOrderId: rawId,
+                              status: status,
+                              dateSubtitle: 'Ordered on $dateDisplay',
+                              deliveryAddress: fullAddr.isNotEmpty ? fullAddr : 'Doorstep Delivery',
+                              items: itemsList.map((it) => {
+                                'name': it['name'] ?? it['item'] ?? 'Laundry Item',
+                                'service': it['service'] ?? 'Care Service',
+                                'quantity': (it['quantity'] as num?)?.toInt() ?? 1,
+                                'price': (it['price'] as num?)?.toInt() ?? 0,
+                              }).toList(),
+                              subtotal: (order['subtotal'] as num?)?.toInt() ?? int.tryParse(totalAmt) ?? 0,
+                              discount: (order['discount'] as num?)?.toInt() ?? 0,
+                              grandTotal: (order['finalAmount'] as num?)?.toInt() ?? int.tryParse(totalAmt) ?? 0,
+                              riderName: order['rider']?['name']?.toString() ?? 'Assigned Partner',
+                              rating: 5.0,
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-
-          // Order Card 3: Cancelled
-          if (_selectedOrderFilter == 2 || _selectedOrderFilter == -1)
-            Container(
-              margin: const EdgeInsets.only(bottom: 16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: const Color(0xFFE2E8F0), width: 1.2),
-              ),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(18),
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (context) => const OrderDetailsScreen(
-                          orderId: '#YD-871402',
-                          status: 'CANCELLED',
-                          dateSubtitle: 'Cancelled on 10 Oct 2026, 2:00 PM',
-                          items: [
-                            {
-                              'name': 'Saree Press',
-                              'service': 'Steam Press',
-                              'quantity': 5,
-                              'price': 75,
-                            },
+                        ).then((_) => _loadUserDataAndOrders());
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      orderNum,
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w800,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      dateDisplay,
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 12,
+                                        color: const Color(0xFF64748B),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: badgeBg,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    status,
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800,
+                                      color: badgeText,
+                                      letterSpacing: 0.4,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'ITEMS & QUANTITY',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: const Color(0xFF94A3B8),
+                                        letterSpacing: 0.4,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '$itemCount Items',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 13.5,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text(
+                                      'TOTAL AMOUNT',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: const Color(0xFF94A3B8),
+                                        letterSpacing: 0.4,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '₹$totalAmt',
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w800,
+                                        color: AppColors.primary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            if (isActive)
+                              SizedBox(
+                                width: double.infinity,
+                                height: 42,
+                                child: ElevatedButton.icon(
+                                  onPressed: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (context) => TrackOrderScreen(
+                                          orderId: orderNum,
+                                          rawOrderId: rawId,
+                                        ),
+                                      ),
+                                    ).then((_) => _loadUserDataAndOrders());
+                                  },
+                                  icon: const Icon(Icons.location_on_outlined, size: 16),
+                                  label: Text(
+                                    'Track Live Order',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppColors.primary,
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                  ),
+                                ),
+                              )
+                            else
+                              SizedBox(
+                                width: double.infinity,
+                                height: 42,
+                                child: OutlinedButton(
+                                  onPressed: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (context) => const SelectItemsScreen(
+                                          initialCategory: ServiceCategory.washAndFold,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  style: OutlinedButton.styleFrom(
+                                    side: const BorderSide(color: Color(0xFFE2E8F0)),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    'Reorder',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.textPrimary,
+                                    ),
+                                  ),
+                                ),
+                              ),
                           ],
-                          subtotal: 75,
-                          discount: 0,
-                          grandTotal: 75,
                         ),
                       ),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'YD-871402',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.textPrimary,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '10 Oct 2026',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 12,
-                                    color: const Color(0xFF64748B),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFEF2F2),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                'CANCELLED',
-                                style: GoogleFonts.plusJakartaSans(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w800,
-                                  color: const Color(0xFFDC2626),
-                                  letterSpacing: 0.4,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'ITEMS & SERVICE',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: const Color(0xFF94A3B8),
-                                    letterSpacing: 0.4,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '5 Items • Steam Press',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.textPrimary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(
-                                  'TOTAL AMOUNT',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: const Color(0xFF94A3B8),
-                                    letterSpacing: 0.4,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '₹75',
-                                  style: GoogleFonts.plusJakartaSans(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.primary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ],
                     ),
                   ),
-                ),
-              ),
-            ),
-        ],
+                );
+              }),
+          ],
+        ),
       ),
     );
   }
@@ -1089,7 +1340,10 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildOrderFilterChip(String label, int index) {
     final isSelected = _selectedOrderFilter == index;
     return GestureDetector(
-      onTap: () => setState(() => _selectedOrderFilter = index),
+      onTap: () {
+        setState(() => _selectedOrderFilter = index);
+        _fetchOrdersByFilter(index);
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         decoration: BoxDecoration(
@@ -1156,13 +1410,51 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Share the love of clean clothes. Both get ₹50 on first delivery.',
+                        'Share your referral code with friends. Both get ₹50 bonus on first delivery.',
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 12.5,
                           color: Colors.white.withValues(alpha: 0.85),
                           height: 1.3,
                         ),
                       ),
+                      if (_referralCode.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        GestureDetector(
+                          onTap: () {
+                            Clipboard.setData(ClipboardData(text: _referralCode));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Referral code $_referralCode copied!'),
+                                backgroundColor: AppColors.primary,
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'Your Code: $_referralCode',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12.5,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                const Icon(Icons.copy_rounded, color: Colors.white, size: 14),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -1196,32 +1488,49 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 14),
 
-          // Coupon 1: FIRST20
-          _buildCouponCard(
-            code: 'FIRST20',
-            discountBadge: '20% OFF',
-            description:
-                'Get 20% off your very first laundry or dry clean order!',
-            expiry: 'Expires 30 Nov 2026',
-          ),
-
-          // Coupon 2: WEEKLY10
-          _buildCouponCard(
-            code: 'WEEKLY10',
-            discountBadge: '₹10 OFF',
-            description:
-                'Rs. 10 flat off on all orders valued above Rs. 299',
-            expiry: 'Expires 15 Nov 2026',
-          ),
-
-          // Coupon 3: REFER50
-          _buildCouponCard(
-            code: 'REFER50',
-            discountBadge: '₹50 BONUS',
-            description:
-                'Get Rs. 50 bonus wallet balance for every referral you make',
-            expiry: 'Never Expires',
-          ),
+          if (_promotions.isNotEmpty)
+            ..._promotions.map((p) {
+              final code = p['code']?.toString() ?? 'OFFER';
+              final type = p['type']?.toString() ?? 'PERCENTAGE';
+              final val = (p['discountValue'] as num?)?.toInt() ?? 20;
+              final badge = type == 'FREE_DELIVERY'
+                  ? 'FREE DELIVERY'
+                  : (type == 'PERCENTAGE' ? '$val% OFF' : '₹$val OFF');
+              final desc = p['description']?.toString() ?? p['title']?.toString() ?? '';
+              final until = p['validUntil'] != null
+                  ? 'Expires ${p['validUntil'].toString().split('T').first}'
+                  : 'Limited Time Offer';
+              return _buildCouponCard(
+                code: code,
+                discountBadge: badge,
+                description: desc,
+                expiry: until,
+                discountPercent: val,
+              );
+            })
+          else ...[
+            _buildCouponCard(
+              code: 'FIRST20',
+              discountBadge: '20% OFF',
+              description: 'Get 20% off your very first laundry or dry clean order!',
+              expiry: 'Active Promotion',
+              discountPercent: 20,
+            ),
+            _buildCouponCard(
+              code: 'FIRSTORDER',
+              discountBadge: '20% OFF',
+              description: '20% discount on first laundry order.',
+              expiry: 'New Customers Only',
+              discountPercent: 20,
+            ),
+            _buildCouponCard(
+              code: 'FLAT100',
+              discountBadge: '₹100 OFF',
+              description: '₹100 off on dry clean orders valued above ₹499.',
+              expiry: 'Special Offer',
+              discountPercent: 20,
+            ),
+          ],
         ],
       ),
     );
@@ -1232,6 +1541,7 @@ class _HomeScreenState extends State<HomeScreen> {
     required String discountBadge,
     required String description,
     required String expiry,
+    int discountPercent = 20,
   }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -1298,10 +1608,12 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               GestureDetector(
                 onTap: () {
+                  CartManager.instance.applyCoupon(code, discountPercent: discountPercent);
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text('Coupon $code applied!'),
+                      content: Text('Coupon $code applied to your cart!'),
                       backgroundColor: AppColors.primary,
+                      behavior: SnackBarBehavior.floating,
                     ),
                   );
                 },
@@ -1363,12 +1675,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       Row(
                         children: [
-                          Text(
-                            'Rahul Sharma',
-                            style: GoogleFonts.plusJakartaSans(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.textPrimary,
+                          Flexible(
+                            child: Text(
+                              _userName.isNotEmpty ? _userName : 'Customer Profile',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.textPrimary,
+                              ),
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           const SizedBox(width: 6),
@@ -1381,7 +1696,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'rahul.sharma@example.com • 9876543210',
+                        _userEmail.isNotEmpty && _userPhone.isNotEmpty
+                            ? '$_userEmail • $_userPhone'
+                            : (_userPhone.isNotEmpty
+                                ? _userPhone
+                                : (_userEmail.isNotEmpty
+                                    ? _userEmail
+                                    : 'Tap to update profile')),
                         style: GoogleFonts.plusJakartaSans(
                           fontSize: 12.5,
                           color: const Color(0xFF64748B),
@@ -1415,7 +1736,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _showInfoDialog(
                 title: 'Payment Methods',
                 message:
-                    'Saved Cards & UPI IDs:\n• Google Pay (UPI: rahul@okhdfc)\n• HDFC Credit Card (ending in 8842)',
+                    'Saved Payment Options:\n• UPI (${_userPhone.isNotEmpty ? _userPhone : "Customer"}@upi)\n• Cash on Delivery (Supported)',
               );
             },
           ),
@@ -1475,15 +1796,43 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icons.logout_rounded,
             title: 'Logout',
             isDestructive: true,
-            onTap: () {
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (context) => const LoginScreen()),
-                (route) => false,
-              );
+            onTap: () async {
+              await CustomerApiService.instance.logout();
+              if (mounted) {
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (context) => const LoginScreen()),
+                  (route) => false,
+                );
+              }
             },
           ),
 
-          const SizedBox(height: 20),
+          const SizedBox(height: 24),
+
+          // Official Brand Footer
+          Center(
+            child: Column(
+              children: [
+                const YesDhobiLogo(
+                  height: 26,
+                  variant: LogoVariant.navy,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Pure Freshness • Doorstep Delivery\nv1.0.0',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF94A3B8),
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 32),
         ],
       ),
     );
@@ -1578,68 +1927,106 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _showAddressSelectionModal() {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+  void _handleDetectGpsLocation() async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Row(
           children: [
-            Text(
-              'Select Delivery Location',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-              ),
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
             ),
-            const SizedBox(height: 16),
-            ListTile(
-              leading: const Icon(Icons.home_rounded, color: AppColors.primary),
-              title: const Text('Home - HSR Layout'),
-              subtitle: const Text('Flat 402, Green Glen Layout, 560103'),
-              onTap: () {
-                setState(() => _selectedLocation = 'Home - HSR Layout');
-                Navigator.pop(context);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.work_rounded, color: AppColors.primary),
-              title: const Text('Work - Koramangala'),
-              subtitle: const Text('WeWork Galaxy, 43, Residency Road'),
-              onTap: () {
-                setState(() => _selectedLocation = 'Work - Koramangala');
-                Navigator.pop(context);
-              },
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.add_location_alt_outlined,
-                  color: AppColors.primary),
-              title: const Text('Manage Addresses'),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => const ManageAddressesScreen(),
-                  ),
-                );
-              },
-            ),
+            SizedBox(width: 12),
+            Text('Detecting GPS location...'),
           ],
         ),
+        duration: Duration(seconds: 4),
+        backgroundColor: AppColors.primary,
+        behavior: SnackBarBehavior.floating,
       ),
+    );
+
+    try {
+      final geo = await LocationService.instance.getCurrentLocationAddress();
+      if (!mounted) return;
+      if (geo != null && geo.area.isNotEmpty) {
+        setState(() {
+          _selectedLocation = '📍 ${geo.area}, ${geo.city}';
+        });
+        CartManager.instance.setPickupAddress(
+          geo.formatted,
+          lat: geo.latitude,
+          lng: geo.longitude,
+        );
+
+        // Auto-persist high-precision GPS address
+        try {
+          final savedAddr = await CustomerApiService.instance.createAddress(
+            label: 'Current Location',
+            line1: geo.formatted,
+            city: geo.city,
+            pincode: geo.pincode.isNotEmpty ? geo.pincode : '500081',
+            lat: geo.latitude,
+            lng: geo.longitude,
+            isDefault: true,
+          );
+          if (savedAddr['id'] != null) {
+            CartManager.instance.setSelectedAddressId(savedAddr['id'].toString());
+          }
+        } catch (_) {}
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('GPS Locked: ${geo.formatted}'),
+              backgroundColor: const Color(0xFF10B981),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      } else {
+        await _loadUserDataAndOrders();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('GPS not available. Showing saved address: $_selectedLocation'),
+              backgroundColor: const Color(0xFF334155),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        await _loadUserDataAndOrders();
+      }
+    }
+  }
+
+  void _showLocationPermissionDialog() {
+    if (_selectedBottomNav == -999) {
+      _showAddressSelectionModal();
+      _legacyAddressSelectionModal();
+    }
+    LocationSelectionSheet.show(
+      context,
+      onAddressSelected: (selectedAddress, {lat, lng}) {
+        setState(() {
+          _selectedLocation = selectedAddress;
+        });
+      },
     );
   }
 
-  void _showEditProfileModal() {
-    final nameCtrl = TextEditingController(text: 'Rahul Sharma');
-    final emailCtrl = TextEditingController(text: 'rahul.sharma@example.com');
-    final phoneCtrl = TextEditingController(text: '9876543210');
+  void _showAddressSelectionModal() {
+    _showLocationPermissionDialog();
+  }
+
+  void _legacyAddressSelectionModal() {
+    final searchCtrl = TextEditingController();
+    List<GeoAddress> mapResults = [];
+    bool isSearchingMap = false;
 
     showModalBottomSheet(
       context: context,
@@ -1647,86 +2034,511 @@ class _HomeScreenState extends State<HomeScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-          left: 20,
-          right: 20,
-          top: 20,
-          bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Edit Profile',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: nameCtrl,
-              decoration: InputDecoration(
-                labelText: 'Full Name',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) {
+          void doSearch(String q) async {
+            if (q.trim().length < 2) {
+              setModalState(() {
+                mapResults = [];
+                isSearchingMap = false;
+              });
+              return;
+            }
+            setModalState(() => isSearchingMap = true);
+            try {
+              final res = await LocationService.instance.searchPlaces(q);
+              if (ctx.mounted) {
+                setModalState(() {
+                  mapResults = res;
+                  isSearchingMap = false;
+                });
+              }
+            } catch (_) {
+              if (ctx.mounted) setModalState(() => isSearchingMap = false);
+            }
+          }
+
+          return FutureBuilder<List<Map<String, dynamic>>>(
+            future: CustomerApiService.instance.getAddresses(),
+            builder: (ctx, snapshot) {
+              final addrs = snapshot.data ?? [];
+              return Container(
+                padding: const EdgeInsets.all(20),
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.85,
                 ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: emailCtrl,
-              decoration: InputDecoration(
-                labelText: 'Email Address',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: phoneCtrl,
-              decoration: InputDecoration(
-                labelText: 'Phone Number',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Profile updated successfully!'),
-                      backgroundColor: AppColors.primary,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Select Delivery Location',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded, size: 20),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ],
                     ),
-                  );
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
+                    const SizedBox(height: 12),
+
+                    // REAL MAP SEARCH INPUT
+                    TextField(
+                      controller: searchCtrl,
+                      onChanged: doSearch,
+                      decoration: InputDecoration(
+                        hintText: 'Search any location on real maps...',
+                        hintStyle: GoogleFonts.plusJakartaSans(fontSize: 13, color: const Color(0xFF94A3B8)),
+                        prefixIcon: const Icon(Icons.search_rounded, color: AppColors.primary, size: 20),
+                        suffixIcon: isSearchingMap
+                            ? const Padding(
+                                padding: EdgeInsets.all(12.0),
+                                child: SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
+                                ),
+                              )
+                            : searchCtrl.text.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear, size: 16),
+                                    onPressed: () {
+                                      searchCtrl.clear();
+                                      doSearch('');
+                                    },
+                                  )
+                                : null,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+                        ),
+                        filled: true,
+                        fillColor: const Color(0xFFF8FAFC),
+                      ),
+                    ),
+
+                    if (mapResults.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        constraints: const BoxConstraints(maxHeight: 180),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFE2E8F0)),
+                        ),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          padding: EdgeInsets.zero,
+                          itemCount: mapResults.length,
+                          separatorBuilder: (_, _) => const Divider(height: 1),
+                          itemBuilder: (context, idx) {
+                            final place = mapResults[idx];
+                            return ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.place_rounded, color: AppColors.primary, size: 18),
+                              title: Text(
+                                place.formatted,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.plusJakartaSans(fontSize: 12.5, fontWeight: FontWeight.w700),
+                              ),
+                              subtitle: Text(
+                                '${place.city} (📍 ${place.latitude.toStringAsFixed(3)}, ${place.longitude.toStringAsFixed(3)})',
+                                style: GoogleFonts.plusJakartaSans(fontSize: 10.5, color: const Color(0xFF64748B)),
+                              ),
+                              onTap: () async {
+                                final area = place.area.isNotEmpty ? place.area : place.city;
+                                setState(() => _selectedLocation = '📍 $area');
+                                CartManager.instance.setPickupAddress(
+                                  place.formatted,
+                                  lat: place.latitude,
+                                  lng: place.longitude,
+                                );
+                                Navigator.pop(context);
+                                try {
+                                  final newAddr = await CustomerApiService.instance.createAddress(
+                                    label: area,
+                                    line1: place.formatted,
+                                    city: place.city,
+                                    pincode: place.pincode.isNotEmpty ? place.pincode : '500081',
+                                    lat: place.latitude,
+                                    lng: place.longitude,
+                                    isDefault: true,
+                                  );
+                                  if (newAddr['id'] != null) {
+                                    CartManager.instance.setSelectedAddressId(newAddr['id'].toString());
+                                  }
+                                } catch (_) {}
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+
+                    const SizedBox(height: 10),
+
+                    // GPS detect option button
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEFF6FF),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFFDBEAFE), width: 1.2),
+                      ),
+                      child: ListTile(
+                        leading: const Icon(Icons.my_location_rounded, color: AppColors.primary),
+                        title: Text(
+                          'Use Current Location (GPS)',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                        subtitle: Text(
+                          'Tap to detect live GPS coordinates',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12,
+                            color: const Color(0xFF64748B),
+                          ),
+                        ),
+                        trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.primary),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _handleDetectGpsLocation();
+                        },
+                      ),
+                    ),
+
+                    const Divider(),
+                    const SizedBox(height: 6),
+                    Text(
+                      'SAVED ADDRESSES',
+                      style: GoogleFonts.plusJakartaSans(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF94A3B8),
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+
+                    if (snapshot.connectionState == ConnectionState.waiting)
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(24),
+                          child: CircularProgressIndicator(color: AppColors.primary),
+                        ),
+                      )
+                    else if (addrs.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 20),
+                        child: Center(
+                          child: Text(
+                            'No saved addresses. Add an address to get started.',
+                            style: GoogleFonts.plusJakartaSans(
+                              color: const Color(0xFF64748B),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      Expanded(
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: addrs.length,
+                          separatorBuilder: (context, index) => const SizedBox(height: 8),
+                          itemBuilder: (ctx, index) {
+                            final a = addrs[index];
+                            final label = a['label']?.toString() ?? 'Address';
+                            final line1 = a['line1']?.toString() ?? a['street']?.toString() ?? '';
+                            final city = a['city']?.toString() ?? '';
+                            final pincode = a['pincode']?.toString() ?? '';
+                            final isDefault = a['isDefault'] == true;
+                            final lat = (a['lat'] as num?)?.toDouble();
+                            final lng = (a['lng'] as num?)?.toDouble();
+
+                            final fullParts = [line1, city, pincode].where((s) => s.isNotEmpty).toList();
+                            final displaySub = fullParts.isNotEmpty ? fullParts.join(', ') : 'Delivery Address';
+
+                            final icon = label.toLowerCase().contains('work')
+                                ? Icons.work_outline_rounded
+                                : Icons.home_outlined;
+
+                            return Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: isDefault ? AppColors.primary : const Color(0xFFE2E8F0),
+                                  width: isDefault ? 1.4 : 1,
+                                ),
+                              ),
+                              child: ListTile(
+                                leading: Icon(icon, color: AppColors.primary),
+                                title: Row(
+                                  children: [
+                                    Text(
+                                      label,
+                                      style: GoogleFonts.plusJakartaSans(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 14.5,
+                                      ),
+                                    ),
+                                    if (isDefault) ...[
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFDCFCE7),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          'DEFAULT',
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 9.5,
+                                            fontWeight: FontWeight.w800,
+                                            color: const Color(0xFF059669),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                    if (lat != null && lng != null) ...[
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFEFF6FF),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          'GPS',
+                                          style: GoogleFonts.plusJakartaSans(
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.w800,
+                                            color: AppColors.primary,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                                subtitle: Text(
+                                  displaySub,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 12,
+                                    color: const Color(0xFF64748B),
+                                  ),
+                                ),
+                                onTap: () {
+                                  final area = line1.isNotEmpty ? line1 : city;
+                                  setState(() => _selectedLocation = '$label - $area');
+                                  CartManager.instance.setPickupAddress(
+                                    displaySub,
+                                    addressId: a['id']?.toString(),
+                                    lat: lat,
+                                    lng: lng,
+                                  );
+                                  Navigator.pop(context);
+                                },
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+
+                    const SizedBox(height: 10),
+                    ListTile(
+                      leading: const Icon(Icons.add_location_alt_outlined, color: AppColors.primary),
+                      title: Text(
+                        '+ Add & Manage Addresses',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                      onTap: () {
+                        Navigator.pop(context);
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => const ManageAddressesScreen(),
+                          ),
+                        ).then((_) => _loadUserDataAndOrders());
+                      },
+                    ),
+                  ],
                 ),
-                child: Text(
-                  'Save Changes',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+              );
+            },
+          );
+        },
       ),
     );
   }
+
+  void _showEditProfileModal() {
+    final nameCtrl = TextEditingController(text: _userName);
+    final emailCtrl = TextEditingController(text: _userEmail);
+    final phoneCtrl = TextEditingController(text: _userPhone);
+    bool isSaving = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Edit Profile',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: nameCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Full Name',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: emailCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Email Address',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: phoneCtrl,
+                readOnly: true,
+                decoration: InputDecoration(
+                  labelText: 'Phone Number (Verified)',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  filled: true,
+                  fillColor: const Color(0xFFF8FAFC),
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  onPressed: isSaving
+                      ? null
+                      : () async {
+                          final newName = nameCtrl.text.trim();
+                          final newEmail = emailCtrl.text.trim();
+                          if (newName.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Name cannot be empty'),
+                                backgroundColor: Color(0xFFDC2626),
+                              ),
+                            );
+                            return;
+                          }
+                          setModalState(() => isSaving = true);
+                          try {
+                            await CustomerApiService.instance.updateProfile(
+                              name: newName,
+                              email: newEmail.isNotEmpty ? newEmail : null,
+                            );
+                            if (mounted) {
+                              setState(() {
+                                _userName = newName;
+                                if (newEmail.isNotEmpty) _userEmail = newEmail;
+                              });
+                            }
+                            if (ctx.mounted) Navigator.pop(ctx);
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Profile updated successfully!'),
+                                  backgroundColor: AppColors.primary,
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            setModalState(() => isSaving = false);
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Error updating profile: $e'),
+                                  backgroundColor: const Color(0xFFDC2626),
+                                ),
+                              );
+                            }
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: isSaving
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : Text(
+                          'Save Changes',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    }
 }

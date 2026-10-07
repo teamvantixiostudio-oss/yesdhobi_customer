@@ -8,11 +8,13 @@ import 'track_order_screen.dart';
 
 class OrderSuccessScreen extends StatelessWidget {
   final String orderId;
+  final String? rawOrderId;
   final String estimatedDelivery;
 
   const OrderSuccessScreen({
     super.key,
     this.orderId = '#YD-892740',
+    this.rawOrderId,
     this.estimatedDelivery = 'Tomorrow, Oct 25\nBy 6:00 PM',
   });
 
@@ -29,11 +31,11 @@ class OrderSuccessScreen extends StatelessWidget {
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
           child: Column(
             children: [
-              const Spacer(flex: 2),
+              const SizedBox(height: 24),
 
               // Green Circle with Checkmark
               Container(
@@ -189,7 +191,7 @@ class OrderSuccessScreen extends StatelessWidget {
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'Rider will arrive for pickup within 45 mins.',
+                              'Rider will arrive for instant pickup within 10 mins.',
                               style: GoogleFonts.plusJakartaSans(
                                 fontSize: 12.5,
                                 fontWeight: FontWeight.w600,
@@ -204,7 +206,7 @@ class OrderSuccessScreen extends StatelessWidget {
                 ),
               ),
 
-              const Spacer(flex: 3),
+              const SizedBox(height: 28),
 
               // Track Order Button
               CustomButton(
@@ -213,8 +215,10 @@ class OrderSuccessScreen extends StatelessWidget {
                   CartManager.instance.clearCart();
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(
-                      builder: (context) => const TrackOrderScreen(
-                        orderId: 'YD-892740',
+                      builder: (context) => TrackOrderScreen(
+                        orderId: orderId,
+                        rawOrderId: rawOrderId,
+                        estimatedDelivery: estimatedDelivery.replaceAll('\n', ' • '),
                       ),
                     ),
                   );

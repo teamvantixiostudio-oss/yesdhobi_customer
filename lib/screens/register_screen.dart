@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../main.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/custom_text_field.dart';
-import '../widgets/social_auth_button.dart';
 import 'login_screen.dart';
 import 'otp_verification_screen.dart';
+import '../services/customer_api_service.dart';
+import '../widgets/yes_dhobi_logo.dart';
 
 class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key});
+  final String? initialPhone;
+  const RegisterScreen({super.key, this.initialPhone});
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -17,10 +21,18 @@ class RegisterScreen extends StatefulWidget {
 class _RegisterScreenState extends State<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
-  final _mobileController = TextEditingController();
+  late final TextEditingController _mobileController;
   final _emailController = TextEditingController();
   final _addressController = TextEditingController();
+  final _pincodeController = TextEditingController();
   bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    clearAllAppSnackBars();
+    _mobileController = TextEditingController(text: widget.initialPhone ?? '');
+  }
 
   @override
   void dispose() {
@@ -28,31 +40,122 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _mobileController.dispose();
     _emailController.dispose();
     _addressController.dispose();
+    _pincodeController.dispose();
     super.dispose();
   }
 
-  void _handleSignUp() {
-    String phone = _mobileController.text.trim();
-    if (phone.isEmpty) {
-      phone = '+91 98765 43210';
+  Future<void> _handleSignUp() async {
+    final name = _nameController.text.trim();
+    final phone = _mobileController.text.trim();
+    final email = _emailController.text.trim();
+    final address = _addressController.text.trim();
+    final pincode = _pincodeController.text.trim();
+
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter your full name'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.length != 10) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Mobile number must be exactly 10 digits'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final gmailRegex = RegExp(r'^[a-zA-Z0-9._%+-]+@gmail\.com$', caseSensitive: false);
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter your Gmail address'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    } else if (!gmailRegex.hasMatch(email)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Email must be a valid address ending with @gmail.com'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    if (pincode.isNotEmpty && !RegExp(r'^\d{6}$').hasMatch(pincode)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a valid 6-digit Pincode'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
     }
 
     setState(() {
       _isLoading = true;
     });
 
-    Future.delayed(const Duration(milliseconds: 600), () {
+    try {
+      final res = await CustomerApiService.instance.requestOtp(digits);
       if (mounted) {
         setState(() {
           _isLoading = false;
         });
+
+        final devOtp = res['devOtp']?.toString();
+        if (devOtp != null && devOtp.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Verification code sent! (Dev OTP: $devOtp)'),
+              backgroundColor: const Color(0xFF10B981),
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => OtpVerificationScreen(phoneNumber: phone),
+            builder: (context) => OtpVerificationScreen(
+              phoneNumber: digits,
+              name: name,
+              email: email.isNotEmpty ? email : null,
+              initialAddress: address.isNotEmpty ? address : null,
+              initialPincode: pincode.isNotEmpty ? pincode : null,
+              devOtpHint: devOtp,
+            ),
           ),
         );
       }
-    });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceAll('Exception: ', '')),
+            backgroundColor: Colors.redAccent,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -67,7 +170,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
+
+                // Official Brand Logo
+                const YesDhobiLogo(
+                  height: 38,
+                  variant: LogoVariant.navy,
+                ),
+
+                const SizedBox(height: 28),
 
                 // Title
                 Text(
@@ -85,53 +196,75 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 Text(
                   'Join Yes Dhobi to experience hassle-free laundry',
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 14,
+                    fontSize: 14.5,
                     fontWeight: FontWeight.w400,
                     color: AppColors.textSecondary,
                   ),
                 ),
 
-                const SizedBox(height: 32),
+                const SizedBox(height: 28),
 
                 // Form Fields
                 CustomTextField(
                   label: 'Full Name',
                   isRequired: true,
-                  hintText: 'Rahul Sharma',
+                  hintText: 'e.g. Neeraj Kumar',
                   prefixIcon: Icons.person_outline_rounded,
                   controller: _nameController,
                 ),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 18),
 
                 CustomTextField(
                   label: 'Mobile Number',
                   isRequired: true,
-                  hintText: '+91 98765 4321',
+                  hintText: '98765 43210',
                   prefixIcon: Icons.call_outlined,
+                  prefixText: '+91 ',
                   keyboardType: TextInputType.phone,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(10),
+                  ],
+                  maxLength: 10,
                   controller: _mobileController,
                 ),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 18),
 
                 CustomTextField(
-                  label: 'Email',
+                  label: 'Gmail Address',
                   isRequired: true,
-                  hintText: 'rahul@gmail.com',
+                  hintText: 'e.g. name@gmail.com',
                   prefixIcon: Icons.mail_outline_rounded,
                   keyboardType: TextInputType.emailAddress,
                   controller: _emailController,
                 ),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 18),
 
                 CustomTextField(
-                  label: 'Delivery Address & Pincode',
-                  isRequired: true,
-                  hintText: 'Flat 402, Green Glen Layout, 560103',
+                  label: 'Delivery Address / Street / Flat',
+                  isRequired: false,
+                  hintText: 'Flat 402, Green Glen Layout, Ramanthapur',
                   prefixIcon: Icons.location_on_outlined,
                   controller: _addressController,
+                ),
+
+                const SizedBox(height: 18),
+
+                CustomTextField(
+                  label: 'Pincode',
+                  isRequired: false,
+                  hintText: 'e.g. 500013',
+                  prefixIcon: Icons.pin_drop_outlined,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(6),
+                  ],
+                  maxLength: 6,
+                  controller: _pincodeController,
                 ),
 
                 const SizedBox(height: 28),
@@ -159,7 +292,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       text: TextSpan(
                         text: 'Already have an account? ',
                         style: GoogleFonts.plusJakartaSans(
-                          fontSize: 14,
+                          fontSize: 14.5,
                           fontWeight: FontWeight.w400,
                           color: AppColors.textSecondary,
                         ),
@@ -167,7 +300,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           TextSpan(
                             text: 'Login',
                             style: GoogleFonts.plusJakartaSans(
-                              fontSize: 14,
+                              fontSize: 14.5,
                               fontWeight: FontWeight.w700,
                               color: AppColors.primary,
                             ),
@@ -176,51 +309,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                     ),
                   ),
-                ),
-
-                const SizedBox(height: 28),
-
-                // OR SIGN IN WITH Divider
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Divider(color: AppColors.border, thickness: 1),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Text(
-                        'OR SIGN IN WITH',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textMuted,
-                          letterSpacing: 0.8,
-                        ),
-                      ),
-                    ),
-                    const Expanded(
-                      child: Divider(color: AppColors.border, thickness: 1),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 20),
-
-                // Social Buttons Row
-                Row(
-                  children: [
-                    SocialAuthButton(
-                      text: 'Google',
-                      icon: const SocialGoogleIcon(size: 18),
-                      onPressed: _handleSignUp,
-                    ),
-                    const SizedBox(width: 14),
-                    SocialAuthButton(
-                      text: 'Apple',
-                      icon: const SocialAppleIcon(size: 18),
-                      onPressed: _handleSignUp,
-                    ),
-                  ],
                 ),
 
                 const SizedBox(height: 32),

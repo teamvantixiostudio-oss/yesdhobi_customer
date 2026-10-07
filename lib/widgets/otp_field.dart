@@ -14,7 +14,7 @@ class OtpInputField extends StatefulWidget {
     this.length = 4,
     required this.onCompleted,
     this.onChanged,
-    this.initialValue = '482',
+    this.initialValue = '',
   });
 
   @override

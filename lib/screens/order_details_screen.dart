@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../services/customer_api_service.dart';
 import '../theme/app_theme.dart';
+
+import 'track_order_screen.dart';
 
 class OrderDetailsScreen extends StatelessWidget {
   final String orderId;
+  final String? rawOrderId;
   final String status;
   final String dateSubtitle;
   final List<Map<String, dynamic>> items;
@@ -17,6 +21,7 @@ class OrderDetailsScreen extends StatelessWidget {
   const OrderDetailsScreen({
     super.key,
     this.orderId = '#YD-881590',
+    this.rawOrderId,
     this.status = 'DELIVERED',
     this.dateSubtitle = 'Completed on 18 Oct 2026, 4:15 PM',
     this.items = const [
@@ -351,6 +356,40 @@ class OrderDetailsScreen extends StatelessWidget {
 
             const SizedBox(height: 20),
 
+            if (!isDelivered && !isCancelled) ...[
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  icon: const Icon(Icons.navigation_outlined, size: 20),
+                  label: Text(
+                    'Track Live Order',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => TrackOrderScreen(
+                          orderId: orderId,
+                          rawOrderId: rawOrderId,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 14),
+            ],
+
             // 6. Download Invoice Button
             Container(
               width: double.infinity,
@@ -364,29 +403,100 @@ class OrderDetailsScreen extends StatelessWidget {
                 color: Colors.transparent,
                 child: InkWell(
                   borderRadius: BorderRadius.circular(16),
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Row(
-                          children: [
-                            const Icon(
-                              Icons.download_done_rounded,
-                              color: Colors.white,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                'Invoice for $orderId downloaded successfully!',
+                  onTap: () async {
+                    final targetId = rawOrderId ?? orderId.replaceAll('#', '').replaceAll('YD-', '');
+                    Map<String, dynamic>? invoiceData;
+                    try {
+                      invoiceData = await CustomerApiService.instance.getOrderInvoice(targetId);
+                    } catch (_) {}
+
+                    final invNum = invoiceData?['invoiceNumber']?.toString() ?? 'INV-$orderId';
+                    if (context.mounted) {
+                      showDialog(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                          title: Row(
+                            children: [
+                              const Icon(Icons.receipt_long_rounded, color: AppColors.primary),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Tax Invoice',
+                                  style: GoogleFonts.plusJakartaSans(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          content: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Invoice No: $invNum',
                                 style: GoogleFonts.plusJakartaSans(
-                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Order Reference: $orderId',
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 12.5,
+                                  color: const Color(0xFF64748B),
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Billed To: ${deliveryAddress.isNotEmpty ? deliveryAddress : "Customer"}',
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 12.5,
+                                  color: const Color(0xFF64748B),
+                                ),
+                              ),
+                              const Divider(height: 24),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    'Total Paid',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  Text(
+                                    '₹$grandTotal',
+                                    style: GoogleFonts.plusJakartaSans(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w800,
+                                      color: AppColors.primary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(ctx).pop(),
+                              child: Text(
+                                'Close',
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.primary,
                                 ),
                               ),
                             ),
                           ],
                         ),
-                        backgroundColor: AppColors.primary,
-                      ),
-                    );
+                      );
+                    }
                   },
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,

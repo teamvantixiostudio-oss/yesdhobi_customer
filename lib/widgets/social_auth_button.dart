@@ -64,67 +64,44 @@ class SocialAuthButton extends StatelessWidget {
   }
 }
 
-/// Custom Google Icon matching the screenshot outline badge style
+/// Official Real Google 4-Color Logo
 class SocialGoogleIcon extends StatelessWidget {
   final double size;
-  const SocialGoogleIcon({super.key, this.size = 18.0});
+  const SocialGoogleIcon({super.key, this.size = 20.0});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return Image.asset(
+      'assets/images/google_logo.png',
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: AppColors.textPrimary, width: 1.6),
-      ),
-      child: Center(
-        child: Icon(
-          Icons.close_rounded,
-          size: size * 0.75,
-          color: AppColors.textPrimary,
-        ),
-      ),
+      fit: BoxFit.contain,
     );
   }
 }
 
-/// Custom Apple Icon matching the screenshot outline badge style
+/// Official Apple Icon
 class SocialAppleIcon extends StatelessWidget {
   final double size;
-  const SocialAppleIcon({super.key, this.size = 18.0});
+  const SocialAppleIcon({super.key, this.size = 20.0});
 
   @override
   Widget build(BuildContext context) {
     return Icon(
-      Icons.devices_other_rounded,
-      size: size,
-      color: AppColors.textPrimary,
+      Icons.apple,
+      size: size + 2,
+      color: Colors.black,
     );
   }
 }
 
-/// Video/Play / Google continuation icon in Welcome Back screen
+/// Alias for backward compatibility
 class SocialPlayGoogleIcon extends StatelessWidget {
   final double size;
   const SocialPlayGoogleIcon({super.key, this.size = 20.0});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size * 0.75,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: AppColors.textPrimary, width: 1.6),
-      ),
-      child: Center(
-        child: Icon(
-          Icons.play_arrow_rounded,
-          size: size * 0.6,
-          color: AppColors.textPrimary,
-        ),
-      ),
-    );
+    return SocialGoogleIcon(size: size);
   }
 }

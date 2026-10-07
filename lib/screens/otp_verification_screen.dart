@@ -1,18 +1,30 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../main.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/otp_field.dart';
 import '../services/customer_api_service.dart';
 import 'home_screen.dart';
+import 'register_screen.dart';
 
 class OtpVerificationScreen extends StatefulWidget {
   final String phoneNumber;
+  final String? name;
+  final String? email;
+  final String? initialAddress;
+  final String? initialPincode;
+  final String? devOtpHint;
 
   const OtpVerificationScreen({
     super.key,
     this.phoneNumber = '9876543000',
+    this.name,
+    this.email,
+    this.initialAddress,
+    this.initialPincode,
+    this.devOtpHint,
   });
 
   @override
@@ -20,7 +32,7 @@ class OtpVerificationScreen extends StatefulWidget {
 }
 
 class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
-  String _otpCode = '1234';
+  late String _otpCode;
   bool _isLoading = false;
   int _countdown = 30;
   Timer? _timer;
@@ -28,6 +40,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
   @override
   void initState() {
     super.initState();
+    _otpCode = widget.devOtpHint ?? '';
     _startCountdown();
   }
 
@@ -63,11 +76,34 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     });
 
     try {
-      await CustomerApiService.instance.verifyOtp(widget.phoneNumber, _otpCode);
+      await CustomerApiService.instance.verifyOtp(
+        widget.phoneNumber,
+        _otpCode,
+        name: widget.name,
+        email: widget.email,
+      );
+
+      // If user registered with an initial delivery address, persist it with their pincode
+      if (widget.initialAddress != null && widget.initialAddress!.trim().isNotEmpty) {
+        try {
+          final pin = (widget.initialPincode != null && widget.initialPincode!.trim().isNotEmpty)
+              ? widget.initialPincode!.trim()
+              : '500081';
+          await CustomerApiService.instance.createAddress(
+            label: 'Home',
+            line1: widget.initialAddress!.trim(),
+            city: 'Hyderabad',
+            pincode: pin,
+            isDefault: true,
+          );
+        } catch (_) {}
+      }
+
       if (mounted) {
         setState(() {
           _isLoading = false;
         });
+        clearAllAppSnackBars(context);
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(builder: (context) => const HomeScreen()),
           (route) => false,
@@ -78,26 +114,156 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
         setState(() {
           _isLoading = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString().replaceAll('Exception: ', '')),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
+
+        clearAllAppSnackBars(context);
+
+        final rawMsg = e.toString().replaceAll('Exception: ', '');
+        final isAccountNotFound = rawMsg.contains('Name is required') ||
+            rawMsg.contains('create your account') ||
+            rawMsg.contains('No account found') ||
+            rawMsg.contains('not found') ||
+            rawMsg.contains('register');
+
+        if (isAccountNotFound && (widget.name == null || widget.name!.trim().isEmpty)) {
+          // Dedicated friendly modal to guide user directly to register (no lingering bottom popup)
+          _showAccountNotFoundDialog();
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(rawMsg),
+              backgroundColor: Colors.redAccent,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
       }
     }
+  }
+
+  void _showAccountNotFoundDialog() {
+    clearAllAppSnackBars(context);
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        backgroundColor: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFFDBEAFE), width: 1.5),
+                ),
+                child: const Icon(
+                  Icons.person_add_alt_1_rounded,
+                  color: AppColors.primary,
+                  size: 32,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                'Account Not Registered',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF0F172A),
+                  letterSpacing: -0.4,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'No account found with mobile number +91 ${widget.phoneNumber}.\n\nPlease register or create a new account to log in to Yes Dhobi.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                  color: const Color(0xFF64748B),
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                  label: Text(
+                    'Create New Account',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    elevation: 0,
+                  ),
+                  onPressed: () {
+                    clearAllAppSnackBars(context);
+                    Navigator.pop(ctx);
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(
+                        builder: (context) => RegisterScreen(
+                          initialPhone: widget.phoneNumber,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                height: 42,
+                child: TextButton(
+                  onPressed: () {
+                    clearAllAppSnackBars(context);
+                    Navigator.pop(ctx);
+                    Navigator.pop(context); // Go back to login screen to re-enter number
+                  },
+                  child: Text(
+                    'Re-enter Mobile Number',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF64748B),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ).then((_) {
+      clearAllAppSnackBars();
+    });
   }
 
   Future<void> _handleResend() async {
     if (_countdown > 0) return;
     try {
-      await CustomerApiService.instance.requestOtp(widget.phoneNumber);
+      final res = await CustomerApiService.instance.requestOtp(widget.phoneNumber);
       _startCountdown();
       if (mounted) {
+        final devOtp = res['devOtp']?.toString();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('OTP sent successfully (Test OTP: 1234)'),
-            backgroundColor: Colors.green,
+          SnackBar(
+            content: Text('OTP sent successfully!${devOtp != null ? " (Dev OTP: $devOtp)" : ""}'),
+            backgroundColor: const Color(0xFF10B981),
+            behavior: SnackBarBehavior.floating,
           ),
         );
       }
@@ -107,6 +273,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
           SnackBar(
             content: Text(e.toString().replaceAll('Exception: ', '')),
             backgroundColor: Colors.redAccent,
+            behavior: SnackBarBehavior.floating,
           ),
         );
       }
@@ -182,12 +349,39 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
                 ),
               ),
 
+              if (widget.devOtpHint != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFECFDF5),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFA7F3D0)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.info_outline, size: 16, color: Color(0xFF059669)),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Demo OTP: ${widget.devOtpHint} (Pre-filled for testing)',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: const Color(0xFF065F46),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
               const SizedBox(height: 36),
 
-              // 4 OTP Boxes matching screenshot (pre-filled with 4, 8, 2)
+              // 4 OTP Boxes
               OtpInputField(
                 length: 4,
-                initialValue: '1234',
+                initialValue: _otpCode,
                 onChanged: (val) {
                   setState(() {
                     _otpCode = val;

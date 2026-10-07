@@ -68,20 +68,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Row(
-                    children: [
-                      const YesDhobiAppBadge(size: 26),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Yes Dhobi',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textPrimary,
-                          letterSpacing: -0.2,
-                        ),
-                      ),
-                    ],
+                  const YesDhobiLogo(
+                    height: 28,
+                    variant: LogoVariant.navy,
                   ),
                   TextButton(
                     onPressed: _navigateToAuth,

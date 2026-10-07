@@ -6,9 +6,15 @@ import '../widgets/custom_button.dart';
 import '../services/api_client.dart';
 import '../services/customer_api_service.dart';
 import 'order_success_screen.dart';
+import 'login_screen.dart';
 
 class OrderSummaryScreen extends StatefulWidget {
-  const OrderSummaryScreen({super.key});
+  final String? isoPickupDate;
+
+  const OrderSummaryScreen({
+    super.key,
+    this.isoPickupDate,
+  });
 
   @override
   State<OrderSummaryScreen> createState() => _OrderSummaryScreenState();
@@ -41,19 +47,42 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
     try {
       // 1. Ensure authenticated
       if (!ApiClient.instance.isAuthenticated) {
-        await CustomerApiService.instance.requestOtp('9876543000');
-        await CustomerApiService.instance.verifyOtp('9876543000', '1234');
+        setState(() => _isPlacingOrder = false);
+        await Navigator.of(context).push(
+          MaterialPageRoute(builder: (context) => const LoginScreen()),
+        );
+        if (!ApiClient.instance.isAuthenticated) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Please log in to confirm your booking'),
+                backgroundColor: AppColors.primary,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+          return;
+        }
+        setState(() => _isPlacingOrder = true);
       }
 
-      // 2. Resolve address (auto-create if new user has none)
-      var addresses = await CustomerApiService.instance.getAddresses();
-      if (addresses.isEmpty) {
-        final newAddr = await CustomerApiService.instance.createAddress();
-        if (newAddr.containsKey('id')) {
-          addresses = [newAddr];
+      // 2. Resolve address
+      String addressId = _cartManager.selectedAddressId ?? '';
+      if (addressId.isEmpty) {
+        final addresses = await CustomerApiService.instance.getAddresses();
+        if (addresses.isNotEmpty) {
+          addressId = addresses[0]['id'].toString();
+        } else {
+          final newAddr = await CustomerApiService.instance.createAddress(
+            label: 'Home',
+            line1: _cartManager.pickupAddress.isNotEmpty
+                ? _cartManager.pickupAddress
+                : 'Flat 204, Green Heights, Hi-Tech City',
+            isDefault: true,
+          );
+          addressId = newAddr['id'].toString();
         }
       }
-      final addressId = addresses.isNotEmpty ? addresses[0]['id'].toString() : '';
 
       // 3. Prepare items payload
       final itemsPayload = _cartManager.selectedItems.map((item) => {
@@ -62,7 +91,8 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
       }).toList();
 
       final now = DateTime.now();
-      final pickupDate = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+      final pickupDate = widget.isoPickupDate ??
+          "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
 
       // 4. Call live AWS backend
       final orderRes = await CustomerApiService.instance.placeOrder(
@@ -72,10 +102,14 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
         pickupSlot: _cartManager.selectedSlot.isNotEmpty ? _cartManager.selectedSlot : '6-8 PM',
         paymentMethod: _selectedPaymentMethod == 0 ? 'UPI' : 'COD',
         promoCode: _cartManager.couponApplied ? _cartManager.couponCode : null,
+        notes: _cartManager.pickupInstructions.isNotEmpty ? _cartManager.pickupInstructions : null,
       );
 
-      final displayId = orderRes['displayId']?.toString() ?? '#YD-100001';
-      final eta = orderRes['deliveryEta']?.toString() ?? 'Tomorrow\nBy 6:00 PM';
+      final rawId = orderRes['id']?.toString() ?? '';
+      final displayId = orderRes['orderNumber'] != null
+          ? '#YD-${orderRes['orderNumber']}'
+          : (orderRes['displayId']?.toString() ?? '#YD-100001');
+      final eta = orderRes['deliveryEta']?.toString() ?? 'Tomorrow • By 6:00 PM';
 
       _cartManager.clearCart();
 
@@ -85,6 +119,7 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
           MaterialPageRoute(
             builder: (context) => OrderSuccessScreen(
               orderId: displayId,
+              rawOrderId: rawId,
               estimatedDelivery: eta,
             ),
           ),
@@ -97,6 +132,7 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
           SnackBar(
             content: Text('Order failed: ${e.toString().replaceAll('Exception: ', '')}'),
             backgroundColor: Colors.redAccent,
+            behavior: SnackBarBehavior.floating,
           ),
         );
       }

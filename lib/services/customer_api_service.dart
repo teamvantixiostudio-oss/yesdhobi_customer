@@ -8,21 +8,37 @@ class CustomerApiService {
 
   final ApiClient _client = ApiClient.instance;
 
+  // ---------------------------------------------------------------------------
+  // Auth
+  // ---------------------------------------------------------------------------
+
   Future<Map<String, dynamic>> requestOtp(String phone) async {
-    // Normalise phone number to 10 digits or E.164
     final cleaned = phone.replaceAll(RegExp(r'[^\d]'), '');
     final tenDigits = cleaned.length >= 10 ? cleaned.substring(cleaned.length - 10) : cleaned;
     return await _client.post('/auth/customer/request-otp', {'phone': tenDigits});
   }
 
-  Future<Map<String, dynamic>> verifyOtp(String phone, String otp) async {
+  Future<Map<String, dynamic>> verifyOtp(
+    String phone,
+    String otp, {
+    String? name,
+    String? email,
+    String? referralCode,
+  }) async {
     final cleaned = phone.replaceAll(RegExp(r'[^\d]'), '');
     final tenDigits = cleaned.length >= 10 ? cleaned.substring(cleaned.length - 10) : cleaned;
-    
-    final res = await _client.post('/auth/customer/verify-otp', {
+
+    final body = <String, dynamic>{
       'phone': tenDigits,
       'otp': otp.trim(),
-    });
+    };
+    if (name != null && name.trim().isNotEmpty) body['name'] = name.trim();
+    if (email != null && email.trim().isNotEmpty) body['email'] = email.trim();
+    if (referralCode != null && referralCode.trim().isNotEmpty) {
+      body['referralCode'] = referralCode.trim();
+    }
+
+    final res = await _client.post('/auth/customer/verify-otp', body);
 
     if (res.containsKey('accessToken')) {
       await _client.setTokens(
@@ -41,6 +57,85 @@ class CustomerApiService {
     return res;
   }
 
+  Future<Map<String, dynamic>> socialLogin({
+    required String provider, // 'GOOGLE' or 'APPLE'
+    required String email,
+    required String name,
+    String? phone,
+    String? avatarUrl,
+  }) async {
+    final body = <String, dynamic>{
+      'provider': provider,
+      'email': email.trim().toLowerCase(),
+      'name': name.trim(),
+    };
+    if (phone != null && phone.trim().isNotEmpty) {
+      final cleaned = phone.replaceAll(RegExp(r'[^\d]'), '');
+      body['phone'] = cleaned.length >= 10 ? cleaned.substring(cleaned.length - 10) : cleaned;
+    }
+    if (avatarUrl != null) body['avatarUrl'] = avatarUrl;
+
+    final res = await _client.post('/auth/customer/social', body);
+
+    if (res.containsKey('accessToken')) {
+      await _client.setTokens(
+        accessToken: res['accessToken'],
+        refreshToken: res['refreshToken'],
+      );
+
+      final prefs = await SharedPreferences.getInstance();
+      if (res.containsKey('user')) {
+        await prefs.setString('user_data', jsonEncode(res['user']));
+      }
+      if (res.containsKey('customer')) {
+        await prefs.setString('customer_data', jsonEncode(res['customer']));
+      }
+    }
+
+    return res;
+  }
+
+  Future<void> logout() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final refreshToken = prefs.getString('refresh_token');
+      if (refreshToken != null) {
+        await _client.post('/auth/logout', {'refreshToken': refreshToken});
+      }
+    } catch (_) {}
+    await _client.clearAuth();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Profile
+  // ---------------------------------------------------------------------------
+
+  Future<Map<String, dynamic>> getProfile() async {
+    final res = await _client.get('/customers/me');
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (res.containsKey('user') && res['user'] != null) {
+        await prefs.setString('user_data', jsonEncode(res['user']));
+      }
+    } catch (_) {}
+    return res;
+  }
+
+  Future<Map<String, dynamic>> updateProfile({String? name, String? email, String? city}) async {
+    final body = <String, dynamic>{};
+    if (name != null) body['name'] = name;
+    if (email != null) body['email'] = email;
+    if (city != null) body['city'] = city;
+    final res = await _client.patch('/customers/me', body);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_data', jsonEncode(res));
+    return res;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Addresses
+  // ---------------------------------------------------------------------------
+
   Future<List<Map<String, dynamic>>> getAddresses() async {
     final res = await _client.get('/customers/me/addresses');
     if (res.containsKey('data') && res['data'] is List) {
@@ -51,18 +146,71 @@ class CustomerApiService {
 
   Future<Map<String, dynamic>> createAddress({
     String label = 'Home',
-    String line1 = 'Flat 204, Green Heights, Hi-Tech City',
+    required String line1,
+    String? line2,
+    String? landmark,
     String city = 'Hyderabad',
     String pincode = '500081',
+    double? lat,
+    double? lng,
+    bool isDefault = false,
   }) async {
     return await _client.post('/customers/me/addresses', {
       'label': label,
       'line1': line1,
+      if (line2 != null && line2.isNotEmpty) 'line2': line2,
+      if (landmark != null && landmark.isNotEmpty) 'landmark': landmark,
       'city': city,
       'pincode': pincode,
-      'isDefault': true,
+      if (lat != null) 'lat': lat,
+      if (lng != null) 'lng': lng,
+      'isDefault': isDefault,
     });
   }
+
+  Future<Map<String, dynamic>> updateAddress(String id, Map<String, dynamic> data) async {
+    return await _client.patch('/customers/me/addresses/$id', data);
+  }
+
+  Future<Map<String, dynamic>> deleteAddress(String id) async {
+    return await _client.delete('/customers/me/addresses/$id');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Catalog & Promo
+  // ---------------------------------------------------------------------------
+
+  Future<List<Map<String, dynamic>>> getPromotions() async {
+    final res = await _client.get('/catalog/promotions');
+    if (res.containsKey('data') && res['data'] is List) {
+      return List<Map<String, dynamic>>.from(res['data']);
+    }
+    return [];
+  }
+
+  Future<Map<String, dynamic>> validateCoupon({
+    required String code,
+    required List<Map<String, dynamic>> items,
+    bool isExpress = false,
+  }) async {
+    return await _client.post('/orders/validate-coupon', {
+      'code': code.trim(),
+      'items': items,
+      'isExpress': isExpress,
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> getPickupSlots() async {
+    final res = await _client.get('/catalog/slots');
+    if (res.containsKey('data') && res['data'] is List) {
+      return List<Map<String, dynamic>>.from(res['data']);
+    }
+    return [];
+  }
+
+  // ---------------------------------------------------------------------------
+  // Orders
+  // ---------------------------------------------------------------------------
 
   Future<Map<String, dynamic>> quoteOrder({
     required List<Map<String, dynamic>> items,
@@ -106,11 +254,31 @@ class CustomerApiService {
     return await _client.post('/orders', body);
   }
 
-  Future<List<Map<String, dynamic>>> getActiveOrders() async {
-    final res = await _client.get('/orders?status=active');
+  Future<List<Map<String, dynamic>>> getOrders({String status = 'all'}) async {
+    final res = await _client.get('/orders?status=$status');
     if (res.containsKey('data') && res['data'] is List) {
       return List<Map<String, dynamic>>.from(res['data']);
     }
     return [];
+  }
+
+  Future<List<Map<String, dynamic>>> getActiveOrders() async {
+    return await getOrders(status: 'active');
+  }
+
+  Future<Map<String, dynamic>> getOrderById(String id) async {
+    return await _client.get('/orders/$id');
+  }
+
+  Future<Map<String, dynamic>> trackOrder(String id) async {
+    return await _client.get('/orders/$id/track');
+  }
+
+  Future<Map<String, dynamic>> getOrderInvoice(String id) async {
+    return await _client.get('/orders/$id/invoice');
+  }
+
+  Future<Map<String, dynamic>> getReferralInfo() async {
+    return await _client.get('/customers/me/referrals');
   }
 }

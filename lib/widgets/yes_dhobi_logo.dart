@@ -1,109 +1,152 @@
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
-/// Custom Vector Washing Machine Icon matching the Yes Dhobi Brand Logo
-class WashingMachineIcon extends StatelessWidget {
-  final double size;
-  final Color color;
-  final double strokeWidth;
+enum LogoVariant {
+  navy,
+  white,
+}
 
-  const WashingMachineIcon({
+/// The official Yes Dhobi vector brand logotype.
+/// Renders the exact brand identity featuring the signature turquoise wave 'o'
+/// and droplet 'i' with vector precision.
+class YesDhobiLogo extends StatelessWidget {
+  final double? width;
+  final double? height;
+  final LogoVariant variant;
+  final BoxFit fit;
+
+  const YesDhobiLogo({
     super.key,
-    this.size = 38.0,
-    this.color = AppColors.primary,
-    this.strokeWidth = 2.4,
+    this.width,
+    this.height = 36.0,
+    this.variant = LogoVariant.navy,
+    this.fit = BoxFit.contain,
   });
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      size: Size(size, size),
-      painter: _WashingMachinePainter(
-        color: color,
-        strokeWidth: strokeWidth,
+    final assetPath = variant == LogoVariant.white
+        ? 'assets/images/yes_dhobi_logo_white.svg'
+        : 'assets/images/yes_dhobi_logo.svg';
+
+    return SvgPicture.asset(
+      assetPath,
+      width: width,
+      height: height,
+      fit: fit,
+    );
+  }
+}
+
+/// Standalone Yes Dhobi Icon Mark / Emblem featuring the iconic
+/// turquoise wave swirl & water droplet in an isolated vector painter.
+class YesDhobiEmblemMark extends StatelessWidget {
+  final double size;
+  final Color waveColor;
+  final Color dropColor;
+
+  const YesDhobiEmblemMark({
+    super.key,
+    this.size = 56.0,
+    this.waveColor = const Color(0xFF00D2B4),
+    this.dropColor = const Color(0xFF0A0944),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        size: Size(size, size),
+        painter: _YesDhobiEmblemPainter(
+          waveColor: waveColor,
+          dropColor: dropColor,
+        ),
       ),
     );
   }
 }
 
-class _WashingMachinePainter extends CustomPainter {
-  final Color color;
-  final double strokeWidth;
+class _YesDhobiEmblemPainter extends CustomPainter {
+  final Color waveColor;
+  final Color dropColor;
 
-  _WashingMachinePainter({
-    required this.color,
-    required this.strokeWidth,
+  _YesDhobiEmblemPainter({
+    required this.waveColor,
+    required this.dropColor,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+    // Exact vector coordinates extracted from yes-dhobi-logo.svg
+    // Center point of the 'o' is at (337.85, 75.40), radius ~ 27
+    // Droplet is at (447, 24.5)
+    // We compose them into a normalized canvas (0..100)
+    final scale = size.width / 100.0;
+    canvas.save();
+    canvas.scale(scale, scale);
 
-    final fillPaint = Paint()
-      ..color = color
+    // Center circular wave 'o'
+    final wavePaint = Paint()
+      ..color = waveColor
       ..style = PaintingStyle.fill;
 
-    final w = size.width;
-    final h = size.height;
+    // Outer ring with inner hole
+    final outerPath = Path();
+    outerPath.addOval(Rect.fromCircle(center: const Offset(48, 54), radius: 32));
+    final innerPath = Path();
+    innerPath.addOval(Rect.fromCircle(center: const Offset(48, 54), radius: 18));
+    final ringPath = Path.combine(PathOperation.difference, outerPath, innerPath);
+    canvas.drawPath(ringPath, wavePaint);
 
-    // Outer Machine Body Rounded Rectangle
-    final outerRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(w * 0.1, h * 0.05, w * 0.8, h * 0.9),
-      Radius.circular(w * 0.18),
-    );
-    canvas.drawRRect(outerRect, paint);
+    // Dynamic swirl wave inside the 'o'
+    final swirlPath = Path();
+    swirlPath.moveTo(34, 54);
+    swirlPath.cubicTo(35, 42, 42, 38, 51, 38);
+    swirlPath.cubicTo(60, 38, 64, 44, 63, 50);
+    swirlPath.cubicTo(62, 55, 57, 57, 52, 54);
+    swirlPath.cubicTo(48, 51, 47, 47, 50, 44);
+    swirlPath.cubicTo(51, 43, 50, 42, 48, 42);
+    swirlPath.cubicTo(42, 43, 38, 48, 38, 54);
+    swirlPath.close();
+    canvas.drawPath(swirlPath, wavePaint);
 
-    // Top control line / bar separator
-    canvas.drawLine(
-      Offset(w * 0.14, h * 0.28),
-      Offset(w * 0.86, h * 0.28),
-      paint..strokeWidth = strokeWidth * 0.8,
-    );
+    // Water droplet on top right
+    final dropPaint = Paint()
+      ..color = dropColor
+      ..style = PaintingStyle.fill;
 
-    // Top left knob / indicator dot
-    canvas.drawCircle(
-      Offset(w * 0.28, h * 0.17),
-      w * 0.04,
-      fillPaint,
-    );
+    final dropletPath = Path();
+    dropletPath.moveTo(76, 26);
+    dropletPath.cubicTo(74, 21, 68, 14, 68, 8);
+    dropletPath.cubicTo(68, 2, 73, -1, 78, -1);
+    dropletPath.cubicTo(83, -1, 87, 2, 87, 8);
+    dropletPath.cubicTo(87, 15, 78, 22, 76, 26);
+    dropletPath.close();
+    canvas.drawPath(dropletPath, dropPaint);
 
-    // Top right small dot/button
-    canvas.drawCircle(
-      Offset(w * 0.72, h * 0.17),
-      w * 0.035,
-      fillPaint,
-    );
+    // Droplet white shine highlight
+    final shinePaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.85)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.2
+      ..strokeCap = StrokeCap.round;
 
-    // Drum Outer Circle
-    final center = Offset(w * 0.5, h * 0.62);
-    final drumRadius = w * 0.23;
-    canvas.drawCircle(center, drumRadius, paint..strokeWidth = strokeWidth);
+    final shinePath = Path();
+    shinePath.moveTo(73, 8);
+    shinePath.cubicTo(73, 4, 75, 1.5, 78, 1);
+    canvas.drawPath(shinePath, shinePaint);
 
-    // Gentle S-curve or water wave inside drum
-    final wavePath = Path();
-    wavePath.moveTo(center.dx - drumRadius * 0.65, center.dy + drumRadius * 0.2);
-    wavePath.cubicTo(
-      center.dx - drumRadius * 0.3,
-      center.dy + drumRadius * 0.7,
-      center.dx + drumRadius * 0.2,
-      center.dy - drumRadius * 0.6,
-      center.dx + drumRadius * 0.65,
-      center.dy - drumRadius * 0.1,
-    );
-    canvas.drawPath(wavePath, paint..strokeWidth = strokeWidth * 0.85);
+    canvas.restore();
   }
 
   @override
-  bool shouldRepaint(covariant _WashingMachinePainter oldDelegate) =>
-      oldDelegate.color != color || oldDelegate.strokeWidth != strokeWidth;
+  bool shouldRepaint(covariant _YesDhobiEmblemPainter oldDelegate) =>
+      oldDelegate.waveColor != waveColor || oldDelegate.dropColor != dropColor;
 }
 
-/// Large Splash Screen Logo Emblem
+/// Ultra-Premium Floating Emblem Badge for the Hero Splash Screen
 class YesDhobiSplashLogo extends StatelessWidget {
   final double size;
 
@@ -118,40 +161,58 @@ class YesDhobiSplashLogo extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(size * 0.32),
         boxShadow: [
+          // Ambient colored aura glow
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.12),
-            blurRadius: 28,
+            color: const Color(0xFF00D2B4).withValues(alpha: 0.35),
+            blurRadius: 36,
+            spreadRadius: 2,
             offset: const Offset(0, 10),
           ),
+          // Deep elevation shadow
           BoxShadow(
-            color: AppColors.primary.withValues(alpha: 0.25),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
+            color: const Color(0xFF0A0944).withValues(alpha: 0.28),
+            blurRadius: 24,
+            offset: const Offset(0, 14),
           ),
         ],
       ),
-      child: Center(
-        child: Container(
-          width: size * 0.78,
-          height: size * 0.78,
-          decoration: BoxDecoration(
-            color: const Color(0xFFF1F5FD),
-            borderRadius: BorderRadius.circular(size * 0.24),
-          ),
-          child: Center(
-            child: WashingMachineIcon(
-              size: size * 0.44,
-              color: const Color(0xFF1E3A8A),
-              strokeWidth: 2.6,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Inner frosted shimmer gradient
+          Container(
+            width: size * 0.86,
+            height: size * 0.86,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFFFFFFFF),
+                  Color(0xFFF0FDF9),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(size * 0.26),
+              border: Border.all(
+                color: const Color(0xFF00D2B4).withValues(alpha: 0.25),
+                width: 1.5,
+              ),
+            ),
+            child: Center(
+              child: YesDhobiEmblemMark(
+                size: size * 0.52,
+                waveColor: const Color(0xFF00D2B4),
+                dropColor: const Color(0xFF0A0944),
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
 }
 
-/// Mini App Header Badge with Washing Machine Icon
+/// Mini App Header Badge with the official Yes Dhobi wave emblem
 class YesDhobiAppBadge extends StatelessWidget {
   final double size;
 
@@ -163,14 +224,21 @@ class YesDhobiAppBadge extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: AppColors.primary,
-        borderRadius: BorderRadius.circular(size * 0.28),
+        color: const Color(0xFF0A0944),
+        borderRadius: BorderRadius.circular(size * 0.3),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF00D2B4).withValues(alpha: 0.25),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Center(
-        child: WashingMachineIcon(
-          size: size * 0.58,
-          color: Colors.white,
-          strokeWidth: 1.8,
+        child: YesDhobiEmblemMark(
+          size: size * 0.65,
+          waveColor: const Color(0xFF00D2B4),
+          dropColor: Colors.white,
         ),
       ),
     );

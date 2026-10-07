@@ -39,6 +39,40 @@ class _SelectItemsScreenState extends State<SelectItemsScreen> {
     if (mounted) setState(() {});
   }
 
+  String _getCategoryAsset(ServiceCategory cat) {
+    switch (cat) {
+      case ServiceCategory.washAndFold:
+        return 'assets/images/service_wash_fold.jpg';
+      case ServiceCategory.washAndIron:
+        return 'assets/images/service_wash_iron.jpg';
+      case ServiceCategory.steamIron:
+        return 'assets/images/service_steam_iron.jpg';
+      case ServiceCategory.dryCleaning:
+        return 'assets/images/service_dry_clean.png';
+      case ServiceCategory.shoeCleaning:
+        return 'assets/images/service_shoe_clean.png';
+      case ServiceCategory.household:
+        return 'assets/images/service_household.png';
+    }
+  }
+
+  IconData _getCategoryIcon(ServiceCategory cat) {
+    switch (cat) {
+      case ServiceCategory.washAndFold:
+        return Icons.local_laundry_service_rounded;
+      case ServiceCategory.washAndIron:
+        return Icons.iron_rounded;
+      case ServiceCategory.steamIron:
+        return Icons.sanitizer_rounded;
+      case ServiceCategory.dryCleaning:
+        return Icons.checkroom_rounded;
+      case ServiceCategory.shoeCleaning:
+        return Icons.cleaning_services_rounded;
+      case ServiceCategory.household:
+        return Icons.home_rounded;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final filteredItems = _cartManager.catalog
@@ -83,9 +117,9 @@ class _SelectItemsScreenState extends State<SelectItemsScreen> {
         children: [
           const SizedBox(height: 8),
 
-          // Horizontal Service Filter Tabs
+          // Horizontal Service Filter Tabs with Medium Service Icons
           SizedBox(
-            height: 42,
+            height: 48,
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -99,29 +133,72 @@ class _SelectItemsScreenState extends State<SelectItemsScreen> {
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
                     margin: const EdgeInsets.only(right: 10),
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       color: isSelected
                           ? const Color(0xFFEFF4FF)
                           : const Color(0xFFF8FAFC),
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(24),
                       border: Border.all(
                         color: isSelected
-                            ? AppColors.primary.withValues(alpha: 0.2)
-                            : const Color(0xFFE2E8F0),
-                        width: 1,
-                      ),
-                    ),
-                    child: Text(
-                      category.title,
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 13,
-                        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                        color: isSelected
                             ? AppColors.primary
-                            : const Color(0xFF64748B),
+                            : const Color(0xFFE2E8F0),
+                        width: isSelected ? 1.5 : 1,
                       ),
+                      boxShadow: isSelected
+                          ? [
+                              BoxShadow(
+                                color: AppColors.primary.withValues(alpha: 0.12),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ]
+                          : null,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Medium Service Icon / Artwork
+                        Container(
+                          width: 30,
+                          height: 30,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(9),
+                            color: Colors.white,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.06),
+                                blurRadius: 4,
+                                offset: const Offset(0, 1),
+                              ),
+                            ],
+                          ),
+                          clipBehavior: Clip.antiAlias,
+                          child: Image.asset(
+                            _getCategoryAsset(category),
+                            fit: BoxFit.cover,
+                            errorBuilder: (ctx, err, stack) => Icon(
+                              _getCategoryIcon(category),
+                              size: 18,
+                              color: isSelected
+                                  ? AppColors.primary
+                                  : const Color(0xFF64748B),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          category.title,
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 13,
+                            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                            color: isSelected
+                                ? AppColors.primary
+                                : const Color(0xFF475569),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 );

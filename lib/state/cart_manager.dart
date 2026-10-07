@@ -11,23 +11,28 @@ class CartManager extends ChangeNotifier {
   String _selectedDate = 'Today, 24';
   String _selectedSlot = '6-8 PM';
   String _pickupAddress = 'Flat 402, Green Glen Layout, Outer Ring...';
+  String? _selectedAddressId;
+  double? _pickupLat;
+  double? _pickupLng;
   String _pickupInstructions = '';
-  bool _couponApplied = true;
-  final String _couponCode = 'FIRSTORDER';
-  final int _couponDiscountPercent = 20;
+  bool _couponApplied = false;
+  String _couponCode = 'FIRSTORDER';
+  int _couponDiscountPercent = 20;
 
   List<LaundryItem> get catalog => _catalog;
   String get selectedDate => _selectedDate;
   String get selectedSlot => _selectedSlot;
   String get pickupAddress => _pickupAddress;
+  String? get selectedAddressId => _selectedAddressId;
+  double? get pickupLat => _pickupLat;
+  double? get pickupLng => _pickupLng;
   String get pickupInstructions => _pickupInstructions;
   bool get couponApplied => _couponApplied;
   String get couponCode => _couponCode;
+  int get couponDiscountPercent => _couponDiscountPercent;
 
   void _initializeCatalog() {
     _catalog.clear();
-    // Default initial items pre-filled matching the user's screenshot
-    // Shirt x2 (Wash & Iron @ 40 = 80), T-Shirt x1 (Wash & Iron @ 30 = 30), Bedsheet x1 (Wash & Fold @ 120 = 120) => Total = 230
     _catalog.addAll([
       // Wash & Fold Items
       LaundryItem(
@@ -36,7 +41,7 @@ class CartManager extends ChangeNotifier {
         category: ServiceCategory.washAndFold,
         price: 40,
         iconKey: 'shirt',
-        quantity: 2,
+        quantity: 0,
       ),
       LaundryItem(
         id: 'wf_2',
@@ -44,7 +49,7 @@ class CartManager extends ChangeNotifier {
         category: ServiceCategory.washAndFold,
         price: 30,
         iconKey: 'tshirt',
-        quantity: 1,
+        quantity: 0,
       ),
       LaundryItem(
         id: 'wf_3',
@@ -68,7 +73,7 @@ class CartManager extends ChangeNotifier {
         category: ServiceCategory.washAndFold,
         price: 120,
         iconKey: 'bedsheet',
-        quantity: 1,
+        quantity: 0,
       ),
       LaundryItem(
         id: 'wf_6',
@@ -307,8 +312,24 @@ class CartManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setPickupAddress(String address) {
+  void setPickupAddress(String address, {String? addressId, double? lat, double? lng}) {
     _pickupAddress = address;
+    if (addressId != null) {
+      _selectedAddressId = addressId;
+    }
+    if (lat != null) _pickupLat = lat;
+    if (lng != null) _pickupLng = lng;
+    notifyListeners();
+  }
+
+  void setCoordinates(double lat, double lng) {
+    _pickupLat = lat;
+    _pickupLng = lng;
+    notifyListeners();
+  }
+
+  void setSelectedAddressId(String? id) {
+    _selectedAddressId = id;
     notifyListeners();
   }
 
@@ -319,6 +340,13 @@ class CartManager extends ChangeNotifier {
 
   void toggleCoupon() {
     _couponApplied = !_couponApplied;
+    notifyListeners();
+  }
+
+  void applyCoupon(String code, {int discountPercent = 20}) {
+    _couponCode = code.toUpperCase();
+    _couponDiscountPercent = discountPercent > 0 ? discountPercent : 20;
+    _couponApplied = true;
     notifyListeners();
   }
 
