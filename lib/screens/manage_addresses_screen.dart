@@ -644,8 +644,8 @@ class _ManageAddressesScreenState extends State<ManageAddressesScreen> {
                                 'line1': line1,
                                 'city': city,
                                 'pincode': pincode,
-                                if (selectedLat != null) 'lat': selectedLat,
-                                if (selectedLng != null) 'lng': selectedLng,
+                                'lat': ?selectedLat,
+                                'lng': ?selectedLng,
                               },
                             );
                           } else {

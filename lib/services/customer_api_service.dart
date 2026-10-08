@@ -162,8 +162,8 @@ class CustomerApiService {
       if (landmark != null && landmark.isNotEmpty) 'landmark': landmark,
       'city': city,
       'pincode': pincode,
-      if (lat != null) 'lat': lat,
-      if (lng != null) 'lng': lng,
+      'lat': ?lat,
+      'lng': ?lng,
       'isDefault': isDefault,
     });
   }
