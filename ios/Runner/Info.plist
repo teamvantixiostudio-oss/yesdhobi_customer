@@ -66,5 +66,9 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Yes Dhobi uses your location to set your pickup address accurately and to show your rider on the map while your order is on the way.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Yes Dhobi uses your location to set your pickup address accurately and to show your rider on the map while your order is on the way.</string>
 </dict>
 </plist>
