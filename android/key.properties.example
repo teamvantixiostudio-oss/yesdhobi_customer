@@ -1,0 +1,9 @@
+# Copy this file to android/key.properties and fill it in.
+# NEVER commit key.properties or the .jks file - anyone holding them can ship
+# an update as you. Keep a backup somewhere safe: lose the key and you can
+# never update this app on Play again, you have to publish a new listing.
+
+storePassword=<the password you chose when creating the keystore>
+keyPassword=<the key password you chose, usually the same>
+keyAlias=upload
+storeFile=../upload-keystore.jks
