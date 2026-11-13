@@ -14,19 +14,19 @@
     },
     {
       "source": "/partners",
-      "destination": "https://REPLACE-WITH-VENDOR-PROJECT.vercel.app/vendoronboarding/"
+      "destination": "https://yes-dhobi.vercel.app/vendoronboarding/"
     },
     {
       "source": "/partners/:path*",
-      "destination": "https://REPLACE-WITH-VENDOR-PROJECT.vercel.app/vendoronboarding/:path*"
+      "destination": "https://yes-dhobi.vercel.app/vendoronboarding/:path*"
     },
     {
       "source": "/vendoronboarding",
-      "destination": "https://REPLACE-WITH-VENDOR-PROJECT.vercel.app/vendoronboarding/"
+      "destination": "https://yes-dhobi.vercel.app/vendoronboarding/"
     },
     {
       "source": "/vendoronboarding/:path*",
-      "destination": "https://REPLACE-WITH-VENDOR-PROJECT.vercel.app/vendoronboarding/:path*"
+      "destination": "https://yes-dhobi.vercel.app/vendoronboarding/:path*"
     },
     {
       "source": "/(.*)",
