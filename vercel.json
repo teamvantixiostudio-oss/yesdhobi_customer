@@ -13,14 +13,6 @@
       "destination": "http://yesdhobi-alb-648458477.ap-southeast-2.elb.amazonaws.com/webhook/:path*"
     },
     {
-      "source": "/partners",
-      "destination": "https://yes-dhobi.vercel.app/vendoronboarding/"
-    },
-    {
-      "source": "/partners/:path*",
-      "destination": "https://yes-dhobi.vercel.app/vendoronboarding/:path*"
-    },
-    {
       "source": "/vendoronboarding",
       "destination": "https://yes-dhobi.vercel.app/vendoronboarding/"
     },
@@ -31,6 +23,18 @@
     {
       "source": "/(.*)",
       "destination": "/index.html"
+    }
+  ],
+  "redirects": [
+    {
+      "source": "/partners",
+      "destination": "/vendoronboarding",
+      "permanent": true
+    },
+    {
+      "source": "/partners/:path*",
+      "destination": "/vendoronboarding/:path*",
+      "permanent": true
     }
   ]
 }
