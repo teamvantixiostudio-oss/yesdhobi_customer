@@ -6,7 +6,17 @@ class ApiClient {
   static final ApiClient instance = ApiClient._internal();
   ApiClient._internal();
 
-  static const String baseUrl = 'http://yesdhobi-alb-648458477.ap-southeast-2.elb.amazonaws.com/api/v1';
+  /// Where the API lives. Overridable at build time so one codebase can point
+  /// at staging, or at https for the web build, without editing source:
+  ///
+  ///   flutter build web --dart-define=API_BASE_URL=https://api.yesdhobi.com/api/v1
+  ///
+  /// A browser will NOT let an https page call an http API - it blocks mixed
+  /// content outright - so any web deployment has to pass an https URL here.
+  static const String baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://yesdhobi-alb-648458477.ap-southeast-2.elb.amazonaws.com/api/v1',
+  );
 
   String? _accessToken;
   String? _refreshToken;
