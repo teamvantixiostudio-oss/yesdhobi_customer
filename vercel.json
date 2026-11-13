@@ -13,6 +13,14 @@
       "destination": "http://yesdhobi-alb-648458477.ap-southeast-2.elb.amazonaws.com/webhook/:path*"
     },
     {
+      "source": "/partners",
+      "destination": "https://REPLACE-WITH-VENDOR-PROJECT.vercel.app/vendoronboarding/"
+    },
+    {
+      "source": "/partners/:path*",
+      "destination": "https://REPLACE-WITH-VENDOR-PROJECT.vercel.app/vendoronboarding/:path*"
+    },
+    {
       "source": "/vendoronboarding",
       "destination": "https://REPLACE-WITH-VENDOR-PROJECT.vercel.app/vendoronboarding/"
     },
