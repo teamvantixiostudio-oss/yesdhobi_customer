@@ -1,0 +1,28 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "if [ -d _flutter ]; then git -C _flutter pull; else git clone https://github.com/flutter/flutter.git -b stable --depth 1 _flutter; fi && _flutter/bin/flutter config --enable-web && _flutter/bin/flutter build web --release --dart-define=API_BASE_URL=https://yesdhobi.com/api/v1",
+  "outputDirectory": "build/web",
+  "framework": null,
+  "rewrites": [
+    {
+      "source": "/api/v1/:path*",
+      "destination": "http://yesdhobi-alb-648458477.ap-southeast-2.elb.amazonaws.com/api/v1/:path*"
+    },
+    {
+      "source": "/webhook/:path*",
+      "destination": "http://yesdhobi-alb-648458477.ap-southeast-2.elb.amazonaws.com/webhook/:path*"
+    },
+    {
+      "source": "/vendoronboarding",
+      "destination": "https://REPLACE-WITH-VENDOR-PROJECT.vercel.app/vendoronboarding/"
+    },
+    {
+      "source": "/vendoronboarding/:path*",
+      "destination": "https://REPLACE-WITH-VENDOR-PROJECT.vercel.app/vendoronboarding/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

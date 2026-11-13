@@ -51,3 +51,6 @@ app.*.map.json
 android/key.properties
 **/*.jks
 **/*.keystore
+
+# Flutter SDK fetched by the Vercel build
+_flutter/
