@@ -20,6 +20,7 @@ class SelectItemsScreen extends StatefulWidget {
 
 class _SelectItemsScreenState extends State<SelectItemsScreen> {
   late ServiceCategory _selectedCategory;
+  String _selectedSubCategory = 'All';
   final CartManager _cartManager = CartManager.instance;
 
   @override
@@ -77,9 +78,24 @@ class _SelectItemsScreenState extends State<SelectItemsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final filteredItems = _cartManager.catalog
+    final categoryItems = _cartManager.catalog
         .where((item) => item.category == _selectedCategory)
         .toList();
+
+    // Extract unique subcategories in order (e.g. ['Men', 'Women', 'Kids'])
+    final availableSubCategories = <String>[];
+    for (final item in categoryItems) {
+      if (item.subCategory != null &&
+          item.subCategory!.isNotEmpty &&
+          !availableSubCategories.contains(item.subCategory)) {
+        availableSubCategories.add(item.subCategory!);
+      }
+    }
+
+    final filteredItems = categoryItems.where((item) {
+      if (_selectedSubCategory == 'All') return true;
+      return item.subCategory == _selectedSubCategory;
+    }).toList();
 
     final hasBasketItems = _cartManager.totalItemCount > 0;
 
@@ -131,7 +147,14 @@ class _SelectItemsScreenState extends State<SelectItemsScreen> {
                 final isSelected = category == _selectedCategory;
 
                 return GestureDetector(
-                  onTap: () => setState(() => _selectedCategory = category),
+                  onTap: () {
+                    if (_selectedCategory != category) {
+                      setState(() {
+                        _selectedCategory = category;
+                        _selectedSubCategory = 'All';
+                      });
+                    }
+                  },
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
                     margin: const EdgeInsets.only(right: 10),
@@ -208,7 +231,36 @@ class _SelectItemsScreenState extends State<SelectItemsScreen> {
             ),
           ),
 
-          const SizedBox(height: 14),
+          // Sub-category Filter Chips (e.g. Men, Women, Kids for Dry Cleaning)
+          if (availableSubCategories.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 38,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                children: [
+                  _buildSubCategoryChip(
+                    label: 'All',
+                    icon: Icons.grid_view_rounded,
+                    isSelected: _selectedSubCategory == 'All',
+                    itemCount: categoryItems.where((i) => i.quantity > 0).fold(0, (sum, i) => sum + i.quantity),
+                    onTap: () => setState(() => _selectedSubCategory = 'All'),
+                  ),
+                  for (final sub in availableSubCategories)
+                    _buildSubCategoryChip(
+                      label: sub,
+                      icon: _getSubCategoryIcon(sub),
+                      isSelected: _selectedSubCategory == sub,
+                      itemCount: categoryItems.where((i) => i.subCategory == sub && i.quantity > 0).fold(0, (sum, i) => sum + i.quantity),
+                      onTap: () => setState(() => _selectedSubCategory = sub),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+          ] else
+            const SizedBox(height: 14),
 
           // Items List
           Expanded(
@@ -270,7 +322,9 @@ class _SelectItemsScreenState extends State<SelectItemsScreen> {
                 const SizedBox(height: 2),
                 RichText(
                   text: TextSpan(
-                    text: '${item.category.title} • ',
+                    text: item.subCategory != null
+                        ? '${item.category.title} (${item.subCategory}) • '
+                        : '${item.category.title} • ',
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 12,
                       fontWeight: FontWeight.w400,
@@ -457,6 +511,99 @@ class _SelectItemsScreenState extends State<SelectItemsScreen> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  IconData _getSubCategoryIcon(String sub) {
+    switch (sub.toLowerCase()) {
+      case 'men':
+        return Icons.man_rounded;
+      case 'women':
+        return Icons.woman_rounded;
+      case 'kids':
+        return Icons.child_care_rounded;
+      case 'home items':
+      case 'home':
+        return Icons.home_rounded;
+      case 'sofa cleaning':
+      case 'sofa':
+        return Icons.weekend_rounded;
+      case 'carpet cleaning':
+      case 'carpet':
+        return Icons.texture_rounded;
+      default:
+        return Icons.category_rounded;
+    }
+  }
+
+  Widget _buildSubCategoryChip({
+    required String label,
+    required IconData icon,
+    required bool isSelected,
+    required int itemCount,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        margin: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.primary : const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? AppColors.primary : const Color(0xFFE2E8F0),
+            width: 1.2,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: AppColors.primary.withValues(alpha: 0.16),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: isSelected ? Colors.white : const Color(0xFF64748B),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 12.5,
+                fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                color: isSelected ? Colors.white : const Color(0xFF334155),
+              ),
+            ),
+            if (itemCount > 0) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                decoration: BoxDecoration(
+                  color: isSelected ? Colors.white : AppColors.primary,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '$itemCount',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: isSelected ? AppColors.primary : Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );

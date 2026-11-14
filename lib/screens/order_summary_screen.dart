@@ -204,6 +204,33 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
                       color: AppColors.textPrimary,
                     ),
                   ),
+                  if (_cartManager.hasWashWeightItems) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEFF6FF),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFFDBEAFE)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.scale_outlined, color: AppColors.primary, size: 16),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '💡 Note: 7 pieces are approximately 1 kg',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: const Color(0xFF1E40AF),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
 
                   // Selected Items Breakdown
@@ -269,8 +296,11 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
                   // Delivery Partner Fee
                   _buildSummaryRow(
                     'Delivery Partner Fee',
-                    'FREE',
-                    amountColor: const Color(0xFF16A34A),
+                    _cartManager.deliveryFee == 0 ? 'FREE' : '₹${_cartManager.deliveryFee}',
+                    originalAmount: (_cartManager.deliveryFee == 0 && _cartManager.subtotal >= CartManager.freeDeliveryThreshold)
+                        ? '₹${CartManager.standardDeliveryFee}'
+                        : null,
+                    amountColor: _cartManager.deliveryFee == 0 ? const Color(0xFF16A34A) : AppColors.textPrimary,
                     isHighlight: true,
                   ),
 
@@ -535,6 +565,7 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
     String amount, {
     Color? amountColor,
     bool isHighlight = false,
+    String? originalAmount,
   }) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -547,13 +578,30 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
             color: const Color(0xFF64748B),
           ),
         ),
-        Text(
-          amount,
-          style: GoogleFonts.plusJakartaSans(
-            fontSize: 13.5,
-            fontWeight: isHighlight ? FontWeight.w700 : FontWeight.w600,
-            color: amountColor ?? AppColors.textPrimary,
-          ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (originalAmount != null) ...[
+              Text(
+                originalAmount,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF94A3B8),
+                  decoration: TextDecoration.lineThrough,
+                ),
+              ),
+              const SizedBox(width: 6),
+            ],
+            Text(
+              amount,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 13.5,
+                fontWeight: isHighlight ? FontWeight.w700 : FontWeight.w600,
+                color: amountColor ?? AppColors.textPrimary,
+              ),
+            ),
+          ],
         ),
       ],
     );

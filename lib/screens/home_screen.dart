@@ -238,7 +238,7 @@ class _HomeScreenState extends State<HomeScreen> {
     },
     {
       'title': 'Dry Cleaning',
-      'price': 'From ₹149',
+      'price': 'From ₹49',
       'category': ServiceCategory.dryCleaning,
       'image': 'assets/images/service_dry_clean.png',
       'bg': const Color(0xFFFDF2F8),
@@ -248,7 +248,7 @@ class _HomeScreenState extends State<HomeScreen> {
     },
     {
       'title': 'Shoe Cleaning',
-      'price': 'From ₹199',
+      'price': 'From ₹249',
       'category': ServiceCategory.shoeCleaning,
       'image': 'assets/images/service_shoe_clean.png',
       'bg': const Color(0xFFE0F2FE),
@@ -1837,6 +1837,11 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           ),
           _buildAccountMenuItem(
+            icon: Icons.mark_email_unread_outlined,
+            title: 'Direct Message to CEO',
+            onTap: _showDirectMessageToCeoDialog,
+          ),
+          _buildAccountMenuItem(
             icon: Icons.star_border_rounded,
             title: 'Rate Us',
             onTap: () {
@@ -2458,6 +2463,112 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           );
         },
+      ),
+    );
+  }
+
+  void _showDirectMessageToCeoDialog() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEFF6FF),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.mark_email_unread_outlined,
+                      color: AppColors.primary,
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Direct Message to CEO',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        Text(
+                          'Direct line to leadership team',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12.5,
+                            color: const Color(0xFF64748B),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                ),
+                child: Text(
+                  'Have feedback, special suggestion, or serious escalation? Our leadership team personally reviews customer communications.',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 13.5,
+                    height: 1.5,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Direct Message to CEO feature will be active soon!'),
+                        backgroundColor: AppColors.primary,
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  },
+                  child: Text(
+                    'Write to CEO',
+                    style: GoogleFonts.plusJakartaSans(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

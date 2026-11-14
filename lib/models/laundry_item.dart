@@ -44,6 +44,7 @@ class LaundryItem {
   final String id;
   final String name;
   final ServiceCategory category;
+  final String? subCategory;
   final int price;
   final String unit;
   final String iconKey;
@@ -53,6 +54,7 @@ class LaundryItem {
     required this.id,
     required this.name,
     required this.category,
+    this.subCategory,
     required this.price,
     this.unit = 'pc',
     required this.iconKey,
@@ -63,6 +65,7 @@ class LaundryItem {
     String? id,
     String? name,
     ServiceCategory? category,
+    String? subCategory,
     int? price,
     String? unit,
     String? iconKey,
@@ -72,6 +75,7 @@ class LaundryItem {
       id: id ?? this.id,
       name: name ?? this.name,
       category: category ?? this.category,
+      subCategory: subCategory ?? this.subCategory,
       price: price ?? this.price,
       unit: unit ?? this.unit,
       iconKey: iconKey ?? this.iconKey,
