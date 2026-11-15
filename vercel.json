@@ -27,6 +27,16 @@
   ],
   "redirects": [
     {
+      "source": "/partner",
+      "destination": "/vendoronboarding",
+      "permanent": true
+    },
+    {
+      "source": "/partner/:path*",
+      "destination": "/vendoronboarding/:path*",
+      "permanent": true
+    },
+    {
       "source": "/partners",
       "destination": "/vendoronboarding",
       "permanent": true
